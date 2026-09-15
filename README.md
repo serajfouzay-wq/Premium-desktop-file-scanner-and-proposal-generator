@@ -13,6 +13,10 @@ process and never leave it.
 
 **[⬇ Download the latest Windows installer](../../releases/latest)**
 
+Two versions can be installed at once. **Cabinet 2** keeps its own settings,
+its own index and its own library folder, so it can be run beside version 1
+and the two sets of results compared. The sidebar shows which one is open.
+
 Run it. Windows will show a blue *"Windows protected your PC"* screen because
 the installer is not code-signed — click **More info**, then **Run anyway**.
 That is a signing warning, not a virus warning, and it appears once.
@@ -37,11 +41,25 @@ desktop-only. See [Deploying the preview](#deploying-the-preview) below.
    shows progress in about a second. `node_modules`, system folders, Office
    lock files, empty and oversized files are skipped and counted.
 3. **Reading** opens each PDF, Word, Excel and text file and extracts the text.
-   A classifier works out the **company** — from a "Bill to" label, a trading
-   name suffix such as *Sdn Bhd* / *Ltd* / *LLC*, or the file name — and the
-   **document type**, with a confidence score. Name variants are merged, so
-   "Meridian Logistics" and "Meridian Logistics Sdn Bhd" don't become two
-   folders.
+
+   Every plausible company name is collected with the evidence that produced
+   it, and then scored. This matters more than it sounds: a document's
+   letterhead names the **sender**, so taking the first company-looking string
+   files your own invoices under your own name. Instead:
+
+   - a name introduced by a recipient label — *Bill To*, *Prepared for*,
+     *Client* — outranks everything, and the label is read across a line break
+   - the company set in Settings is never treated as the client
+   - a name heading several documents in one batch is detected as a sender and
+     pushed down, so this holds even before Settings is filled in
+   - *"This Agreement is made between A and B"* names the counterparty
+   - names differing only in length are merged, so "Meridian Logistics" and
+     "Meridian Logistics Sdn Bhd" are one company, and the agreement raises
+     confidence rather than splitting it
+
+   Document type is scored from strong and weak signals with contradictions
+   counted against, and the reference number, issue date (preferred over a due
+   date) and day-first dates are read out of the text.
 4. **Review.** Anything below the confidence threshold waits in a review queue
    with the reason and a best guess. Nothing is filed on a guess alone.
 5. **Filing** places approved documents at:
@@ -49,6 +67,10 @@ desktop-only. See [Deploying the preview](#deploying-the-preview) below.
    ```
    <Library folder>/<Company Name>/<Document Type>/<Cleaned_Name.ext>
    ```
+
+   The name carries the reference number where the document has one —
+   `Meridian_Logistics_Sdn_Bhd_Invoice_INV-2291_2025-03-14.pdf` — which is what
+   tells one of a company's twelve monthly invoices from the rest.
 
    Files are **copied by default**, so originals stay where they are, and a
    name collision never overwrites — it gets a numeric suffix.
@@ -60,8 +82,10 @@ desktop-only. See [Deploying the preview](#deploying-the-preview) below.
 2. Cabinet parses the request, matches the client against companies it holds,
    and retrieves the relevant past work itself. Nothing to look up or attach.
 3. The draft renders as a designed document — cover page carrying both logos,
-   photograph plates, numbered sections, a schedule band, an investment table,
-   assumptions and a signature block.
+   a contents page built from the sections that actually render, photograph
+   plates, numbered sections, a schedule band, an investment table, assumptions
+   and a signature block, with a running footer carrying the title and page
+   number.
 4. Export to **PDF** or **Word**, or save it back into the library so the next
    proposal can draw on it.
 
@@ -99,7 +123,8 @@ Otherwise:
 npm install
 npm run dev        # Vite + Electron, hot reload
 npm start          # production build, then launch
-npm run test:e2e   # 38 checks across the whole pipeline
+npm run test:e2e      # 39 checks across the whole pipeline
+npm run test:classify # 12 checks over real document shapes
 npm run dist:win   # package a Windows installer
 ```
 
@@ -183,3 +208,18 @@ test/
 | Index and settings | Your per-user app data directory — shown in Settings |
 
 The library is plain folders and files. Nothing is locked inside the app.
+
+---
+
+## Known limits
+
+**Scanned documents.** A PDF that is a photograph of paper has no selectable
+text, so it goes to the review queue rather than being read. Optical character
+recognition would fix this and is the obvious next step, but it needs an image
+renderer and a language model file downloaded on first run, which is a decision
+about size and offline behaviour rather than a small addition.
+
+**Proposal styling.** The document structure is deliberate; the visual style is
+a reasonable default rather than a match for any particular house style. Supply
+a few existing proposals and the layout, section order and cover treatment can
+be matched to them.
