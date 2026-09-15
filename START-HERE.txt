@@ -1,0 +1,87 @@
+CABINET — how to run it on Windows
+==================================
+
+STEP 1 — Unzip everything first
+-------------------------------
+Right-click the zip file you downloaded and choose "Extract All...".
+Pick somewhere easy, like your Desktop.
+
+This step matters. If you open the zip and double-click Cabinet.exe
+from INSIDE the zip window, it will not work. Extract it first.
+
+
+STEP 2 — Open the app
+---------------------
+Go into the extracted folder and double-click:
+
+    Cabinet.exe
+
+
+STEP 3 — Windows will show a blue warning. This is expected.
+------------------------------------------------------------
+You will probably see:
+
+    "Windows protected your PC"
+
+This appears because the app has not been through Microsoft's paid
+code-signing process. It is not a virus warning and it does not mean
+anything is wrong. Every unsigned app shows it.
+
+To continue:
+    1. Click "More info"
+    2. Click "Run anyway"
+
+You only have to do this the first time.
+
+
+STEP 4 — Set yourself up (2 minutes)
+------------------------------------
+1. Click "Settings" in the left sidebar.
+2. Type your company name, and add your logo if you have one.
+   This is what appears at the top of every proposal you create.
+3. Check the "Library folder" — this is where Cabinet will keep the
+   organised copies of your documents. The default is fine.
+4. Click "Save settings".
+
+
+STEP 5 — Try the file scanner
+-----------------------------
+1. Click "Filing desk" in the sidebar.
+2. Click "Choose a folder" and pick a folder that has some PDFs or
+   Word documents in it. Your Downloads folder is a good test.
+3. Watch it read them and work out which company each one belongs to.
+4. Anything it is unsure about appears in a review list where you can
+   correct it.
+5. Click "File ... into library" when you are happy.
+
+YOUR ORIGINAL FILES ARE NOT MOVED OR DELETED. Cabinet copies them.
+You can change this in Settings if you would rather it move them.
+
+
+STEP 6 — Write a proposal
+-------------------------
+1. Click "Write a proposal".
+2. Type what you want in normal English, for example:
+       a proposal for Acme Ltd covering a 12 week website rebuild
+3. Click "Generate draft".
+4. Edit any wording you like, then type in your prices.
+5. Click "PDF" to save a finished document.
+
+NOTE ON PRICES: Cabinet will never invent a price for you. Every
+amount has to be typed in by you, and the PDF button stays greyed out
+until every line has a price. This is deliberate.
+
+
+IF SOMETHING GOES WRONG
+-----------------------
+- Nothing happens when you double-click Cabinet.exe
+      You are probably still inside the zip. Go back to Step 1.
+
+- "Choose a folder" does nothing
+      Try a smaller folder first. Scanning a whole drive takes a while.
+
+- A document was filed under the wrong company
+      Open "Library", find it, and you can remove it from the index.
+      The file on your disk is never touched.
+
+Everything happens on your own computer. No documents are uploaded.

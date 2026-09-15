@@ -1,0 +1,12 @@
+# Dependencies — matches a real directory and a symlink alike
+node_modules
+node_modules/
+
+# Build output
+dist/
+release/
+
+# Local noise
+*.log
+.DS_Store
+.vercel

@@ -1,0 +1,61 @@
+# Builds the desktop app on a real Windows machine and publishes the installer
+# as a downloadable release, so nobody needs a build toolchain to get a
+# runnable copy.
+name: Build Windows app
+
+on:
+  workflow_dispatch:          # run it by hand from the Actions tab
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'START-HERE.txt']
+
+permissions:
+  contents: write             # needed to publish the release
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the interface
+        run: npm run build
+
+      # On a real Windows runner there is no wine constraint, so the icon and
+      # exe metadata can be written and a proper installer produced.
+      - name: Package installer
+        run: >
+          npx electron-builder --win --x64 --publish never
+          --config.win.target=nsis
+          --config.win.signAndEditExecutable=true
+          --config.win.artifactName="Cabinet-Setup-${{ github.run_number }}.exe"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cabinet-Windows
+          path: release/*.exe
+          if-no-files-found: error
+
+      - name: Publish a release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          tag="build-${{ github.run_number }}"
+          gh release create "$tag" release/*.exe \
+            --title "Cabinet — Windows build ${{ github.run_number }}" \
+            --notes "Download **Cabinet-Setup-${{ github.run_number }}.exe** below and run it.
+
+          Windows will show a blue \"Windows protected your PC\" screen because the
+          installer is not code-signed. Click **More info**, then **Run anyway**.
+          See \`START-HERE.txt\` for the full walkthrough."

@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root { color-scheme: light; }
+  html, body, #root { height: 100%; }
+  body {
+    @apply bg-paper text-ink font-sans antialiased;
+    font-size: 14px;
+    overflow: hidden;              /* the app scrolls its panes, not the window */
+  }
+  ::selection { background: theme('colors.brass.wash'); }
+  /* A desktop app shouldn't feel like a web page. */
+  * { -webkit-user-drag: none; }
+  input, textarea, [contenteditable] { user-select: text; }
+}
+
+@layer components {
+  .field {
+    @apply w-full rounded-md border border-rule bg-white px-3 py-2 text-[13.5px] text-ink
+           placeholder:text-ink-faint shadow-[inset_0_1px_0_rgba(18,25,28,.03)]
+           transition focus:border-ledger focus:outline-none focus:ring-2 focus:ring-ledger/15;
+  }
+  .label { @apply mb-1.5 block text-[11px] font-semibold uppercase tracking-[.09em] text-ink-faint; }
+  .card { @apply rounded-xl border border-rule bg-paper-raised shadow-card; }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-rule bg-paper-sunk
+           px-2.5 py-1 text-[11px] font-medium text-ink-soft;
+  }
+  .scroll-thin { scrollbar-width: thin; scrollbar-color: theme('colors.rule.strong') transparent; }
+  .scroll-thin::-webkit-scrollbar { width: 10px; height: 10px; }
+  .scroll-thin::-webkit-scrollbar-thumb {
+    @apply rounded-full border-4 border-solid border-transparent bg-rule-strong bg-clip-content;
+  }
+}
+
+/* The drag region for the frameless macOS title bar. */
+.drag { -webkit-app-region: drag; }
+.no-drag { -webkit-app-region: no-drag; }
