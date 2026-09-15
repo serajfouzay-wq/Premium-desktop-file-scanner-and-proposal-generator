@@ -88,6 +88,13 @@ excluded and why.
 
 ## Running from source
 
+**Using VS Code on Windows?** Follow [RUN-IN-VSCODE.md](RUN-IN-VSCODE.md) — it
+covers installing Node.js, cloning through the VS Code interface, and the
+PowerShell script-blocking error that catches most people. Once set up, **F5**
+runs the app.
+
+Otherwise:
+
 ```bash
 npm install
 npm run dev        # Vite + Electron, hot reload

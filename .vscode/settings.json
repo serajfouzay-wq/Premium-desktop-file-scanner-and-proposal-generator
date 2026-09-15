@@ -1,0 +1,14 @@
+{
+  "files.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/release": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/release": true,
+    "**/package-lock.json": true
+  },
+  "javascript.preferences.importModuleSpecifierEnding": "minimal"
+}
