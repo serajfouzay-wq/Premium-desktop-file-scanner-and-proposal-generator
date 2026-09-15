@@ -125,5 +125,5 @@ switches to it automatically. Settings will say *SQLite (WebAssembly)*.
 Everything works.
 
 **A blank white window**
-The interface didn't finish building. In the terminal run `npm run build:desktop`,
+The interface didn't finish building. In the terminal run `npm run build`,
 watch for errors, then press F5 again.

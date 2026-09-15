@@ -11,7 +11,7 @@
     {
       "label": "Build interface",
       "type": "shell",
-      "command": "npm run build:desktop",
+      "command": "npm run build",
       "problemMatcher": [],
       "presentation": { "reveal": "silent", "panel": "dedicated" }
     },

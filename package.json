@@ -11,13 +11,14 @@
   "scripts": {
     "dev": "concurrently -k -n VITE,ELECTRON -c cyan,magenta \"vite\" \"wait-on tcp:5273 && cross-env NODE_ENV=development electron .\"",
     "dev:web": "vite",
-    "build": "vite build",
-    "start": "npm run build:desktop && electron .",
-    "dist": "npm run build:desktop && electron-builder",
+    "build": "cross-env ELECTRON_BUILD=1 vite build",
+    "start": "npm run build && npm run verify:desktop && electron .",
+    "dist": "npm run build && npm run verify:desktop && electron-builder",
     "test:e2e": "xvfb-run -a electron test/e2e.js",
-    "dist:win": "npm run build:desktop && electron-builder --win --x64",
+    "dist:win": "npm run build && npm run verify:desktop && electron-builder --win --x64",
     "build:sample": "node scripts/build-sample.js",
-    "build:desktop": "cross-env ELECTRON_BUILD=1 vite build"
+    "build:web": "vite build",
+    "verify:desktop": "node scripts/verify-desktop-build.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",

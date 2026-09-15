@@ -27,8 +27,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # `npm run build` is the desktop build. The verify step fails the job if
+      # its output could not run inside Electron, so a blank-window build can
+      # never reach a release again.
       - name: Build the interface
         run: npm run build
+
+      - name: Verify the build can run in Electron
+        run: npm run verify:desktop
 
       # On a real Windows runner there is no wine constraint, so the icon and
       # exe metadata can be written and a proper installer produced.

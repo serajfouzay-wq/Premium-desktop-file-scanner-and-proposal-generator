@@ -56,6 +56,59 @@ function createWindow() {
     if (/^https?:/.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
+
+  // A renderer that fails to load leaves an empty window and says nothing,
+  // which is indistinguishable from the app being broken. Say what happened.
+  win.webContents.on('did-fail-load', (_e, code, description, url, isMainFrame) => {
+    if (!isMainFrame) return;
+    showStartupError(win, `The interface failed to load (${description}).`, url);
+  });
+
+  // Same for a build whose assets never arrive: the page loads, but nothing
+  // mounts. Checking the root element is the only reliable signal.
+  win.webContents.on('did-finish-load', async () => {
+    // did-finish-load can beat React's first paint, and a false alarm here
+    // would be worse than the bug it guards. Give the tree a moment, then
+    // re-check before declaring anything wrong.
+    await new Promise((r) => setTimeout(r, 1500));
+    try {
+      if (win.isDestroyed()) return;
+      const mounted = await win.webContents.executeJavaScript(
+        "!!document.getElementById('root') && document.getElementById('root').children.length > 0",
+      );
+      if (!mounted) {
+        showStartupError(win, 'The interface loaded but rendered nothing.', win.webContents.getURL());
+      }
+    } catch { /* the window went away; nothing to report */ }
+  });
+}
+
+/* A visible, explainable failure beats a blank window every time. */
+function showStartupError(target, headline, url) {
+  const detail = isDev
+    ? 'The development server may not be running. Try `npm run dev`.'
+    : 'This usually means the interface was built for the web rather than the '
+      + 'desktop. Rebuild with `npm run build`, which runs the same check that '
+      + 'packaging does.';
+  const page = `<!doctype html><meta charset="utf-8">
+    <style>
+      body{margin:0;display:grid;place-items:center;min-height:100vh;
+        background:#F6F5F1;color:#12191C;
+        font:14px/1.6 Inter,"Segoe UI",system-ui,sans-serif}
+      main{max-width:56ch;padding:40px}
+      h1{font-size:19px;margin:0 0 10px}
+      p{margin:0 0 12px;color:#4A565B}
+      code{background:#EDEBE4;border-radius:4px;padding:1px 5px;font-size:12.5px}
+      .u{font-size:11.5px;color:#8A959A;word-break:break-all;margin-top:18px}
+    </style>
+    <main>
+      <h1>${headline}</h1>
+      <p>${detail}</p>
+      <p>If you downloaded this as an installer, please report it — the build
+         was packaged incorrectly, not installed incorrectly.</p>
+      <div class="u">${url || ''}</div>
+    </main>`;
+  target.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(page)}`);
 }
 
 app.whenReady().then(() => {
