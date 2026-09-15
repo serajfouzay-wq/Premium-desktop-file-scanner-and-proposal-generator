@@ -115,7 +115,10 @@ app.whenReady().then(() => {
   nativeTheme.themeSource = 'light';
   const userData = app.getPath('userData');
   engineInfo = db.init(userData);
-  settings.init(userData, path.join(app.getPath('documents'), 'Cabinet Library'));
+  // Named after the running app, so version 1 and version 2 file into
+  // separate folders and can be compared side by side rather than shuffled
+  // into one pile. An existing install keeps whatever it was already set to.
+  settings.init(userData, path.join(app.getPath('documents'), `${app.getName()} Library`));
   createWindow();
 
   app.on('activate', () => {
