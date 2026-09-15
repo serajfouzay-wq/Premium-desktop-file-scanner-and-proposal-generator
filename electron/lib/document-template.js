@@ -52,7 +52,9 @@ function styles(accent) {
     --ink:#14191C; --ink-soft:#4C585E; --ink-faint:#8B949A;
     --rule:#DFDCD3; --paper:#FFFFFF; --wash:#F6F5F1;
   }
-  @page { size:A4; margin:18mm 16mm 20mm; }
+  /* Page numbers come from Chromium's own print footer in exporters.js —
+     CSS paged-media margin boxes are not supported by the print engine. */
+  @page { size:A4; margin:20mm 16mm 22mm; }
   *{box-sizing:border-box}
   html,body{margin:0;padding:0}
   body{
@@ -65,7 +67,26 @@ function styles(accent) {
   .sans{font-family:Inter,"Segoe UI","SF Pro Text",system-ui,sans-serif}
 
   /* ---------- cover ---------- */
+  /* Each major part starts on its own sheet, so a scope never begins three
+     lines from the bottom of a page. */
   .cover{ position:relative; padding:0 0 18mm; break-after:page; }
+  .contents{ break-after:page; padding-top:4mm; }
+  .contents h2{
+    font-family:Inter,system-ui,sans-serif; font-size:8pt; letter-spacing:.2em;
+    text-transform:uppercase; color:var(--ink-faint); margin:0 0 6mm; font-weight:600;
+  }
+  .contents ol{ margin:0; padding:0; list-style:none; counter-reset:toc; }
+  .contents li{
+    display:flex; align-items:baseline; gap:10px; padding:3.2mm 0;
+    border-bottom:1px solid var(--rule); counter-increment:toc;
+  }
+  .contents li::before{
+    content:counter(toc,decimal-leading-zero);
+    font-family:Inter,system-ui,sans-serif; font-size:8pt; font-weight:700;
+    color:var(--accent); min-width:22px;
+  }
+  .contents .t{ flex:1; font-size:12pt; font-weight:600; letter-spacing:-.01em; }
+  .contents .t{ letter-spacing:-.01em }
   .crest{
     display:flex; justify-content:space-between; align-items:flex-start;
     gap:18px; padding:0 0 10mm; border-bottom:1px solid var(--rule);
@@ -121,7 +142,9 @@ function styles(accent) {
   }
 
   /* ---------- sections ---------- */
-  section{ break-inside:avoid-page; margin:0 0 11mm; }
+  section{ margin:0 0 11mm; break-inside:auto; }
+  .sec-head{ break-after:avoid; }            /* a heading never ends a page */
+  section p{ orphans:2; widows:2; }          /* no single stranded line */
   .sec-head{ display:flex; align-items:baseline; gap:12px; margin:0 0 4mm;
     padding-bottom:3mm; border-bottom:1px solid var(--rule); }
   .sec-num{
@@ -208,7 +231,22 @@ function renderDocument(doc, brand, items, assets = {}) {
     ? `<img src="${esc(assets.clientLogo)}" alt="${esc(doc.company)}">`
     : `<div class="who"><b>${esc(doc.company)}</b>Prepared for</div>`;
 
+
   const timeline = (doc.phases && doc.phases.length ? doc.phases : null);
+
+  /* Contents is derived from the parts that actually render, so it can never
+     list a section the document does not contain. */
+  const parts = [
+    ...sections.map((s) => s.heading),
+    'Investment',
+    ...(timeline ? ['Schedule'] : []),
+    ...(doc.terms ? ['Terms'] : []),
+  ];
+
+  const contents = parts.length > 3 ? `<nav class="contents">
+    <h2>Contents</h2>
+    <ol>${parts.map((t) => `<li><span class="t">${esc(t)}</span></li>`).join('')}</ol>
+  </nav>` : '';
 
   const body = sections.map((s, i) => {
     const plate = assets.plates && assets.plates[i];
@@ -254,6 +292,8 @@ function renderDocument(doc, brand, items, assets = {}) {
       ${complete ? `<div><dt>Total investment</dt><dd>${esc(money(total, currency))}</dd></div>` : ''}
     </dl>
   </div>
+
+  ${contents}
 
   ${body}
 

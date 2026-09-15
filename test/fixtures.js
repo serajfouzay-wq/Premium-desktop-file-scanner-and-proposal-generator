@@ -8,6 +8,7 @@ const { Document, Packer, Paragraph, HeadingLevel } = require('docx');
 
 const INVOICE_HTML = `<!doctype html><meta charset="utf-8">
 <body style="font:12pt Georgia;padding:40px">
+<p>Northwind Industrial Pte Ltd<br>11 Dockside Way, Singapore</p>
 <h1>TAX INVOICE</h1>
 <p>Invoice No: INV-2291<br>Date: 2025-03-14</p>
 <p>Bill To: Meridian Logistics Sdn Bhd<br>14 Jalan Perindustrian, Shah Alam</p>
@@ -20,6 +21,7 @@ const INVOICE_HTML = `<!doctype html><meta charset="utf-8">
 
 const PROPOSAL_HTML = `<!doctype html><meta charset="utf-8">
 <body style="font:12pt Georgia;padding:40px">
+<p>Northwind Industrial Pte Ltd<br>11 Dockside Way, Singapore</p>
 <h1>PROPOSAL</h1>
 <p>Prepared for: Meridian Logistics Sdn Bhd<br>Date: 12 January 2025</p>
 <h2>OVERVIEW</h2>

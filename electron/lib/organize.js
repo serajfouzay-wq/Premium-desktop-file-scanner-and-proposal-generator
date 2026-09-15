@@ -24,20 +24,23 @@ function safeSegment(value, fallback = 'Unfiled') {
   return s;
 }
 
-function cleanFileName(company, typeLabel, date, ext) {
+function cleanFileName(company, typeLabel, date, ext, docNumber) {
   const parts = [
     safeSegment(company, 'Unfiled').replace(/\s+/g, '_'),
     safeSegment(typeLabel, 'Document').replace(/\s+/g, '_'),
-    date || new Date().toISOString().slice(0, 10),
   ];
-  return parts.join('_') + '.' + ext;
+  // A reference number is what tells one of twelve monthly invoices from the
+  // rest, so it goes in the name when the document carries one.
+  if (docNumber) parts.push(safeSegment(docNumber, '').replace(/\s+/g, '_'));
+  parts.push(date || new Date().toISOString().slice(0, 10));
+  return parts.filter(Boolean).join('_') + '.' + ext;
 }
 
 /** Where a document *would* go — used for the preview tree before anything moves. */
 function plan(root, doc) {
   const company = safeSegment(doc.company, 'Unfiled');
   const folder = safeSegment(doc.folder, 'Unsorted');
-  const name = cleanFileName(doc.company, doc.typeLabel, doc.date, doc.ext);
+  const name = cleanFileName(doc.company, doc.typeLabel, doc.date, doc.ext, doc.docNumber);
   return {
     company, folder, name,
     dir: path.join(root, company, folder),

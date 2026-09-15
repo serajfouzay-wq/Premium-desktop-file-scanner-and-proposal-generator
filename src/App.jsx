@@ -91,7 +91,16 @@ function Sidebar({ view, setView, info, settings }) {
             <Icon name="library" size={17} />
           </span>
           <div className="min-w-0">
-            <div className="truncate text-[14px] font-bold tracking-[-.01em] text-white">Cabinet</div>
+            <div className="flex items-center gap-1.5">
+              <span className="truncate text-[14px] font-bold tracking-[-.01em] text-white">Cabinet</span>
+              {/* Both versions can be installed at once, so which one is open
+                  has to be obvious at a glance during a demo. */}
+              {info && (
+                <span className="rounded bg-brass px-1.5 py-px text-[9.5px] font-bold text-slate-950">
+                  v{String(info.version).split('.')[0]}
+                </span>
+              )}
+            </div>
             <div className="truncate text-[10.5px] text-white/45">{brandName}</div>
           </div>
         </div>

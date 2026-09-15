@@ -62,15 +62,22 @@ app.whenReady().then(async () => {
     console.log('\nPhase 2 — extraction and classification');
     const known = [];
     const records = [];
+    const { extractCandidates, detectSenders } = require('../electron/lib/classify');
+    const sets = [];
     for (const f of files) {
       const rec = { ...f };
       try {
         const { text } = await extractText(f);
         rec.text = text;
-        Object.assign(rec, classify(text, f.name, known));
-        if (rec.company && !known.includes(rec.company)) known.push(rec.company);
+        sets.push(extractCandidates(text, f.name).candidates);
       } catch (err) { rec.error = err.message; }
       records.push(rec);
+    }
+    const senderNames = detectSenders(sets);
+    for (const rec of records) {
+      if (!rec.text) continue;
+      Object.assign(rec, classify(rec.text, rec.name, { known, senderNames }));
+      if (rec.company && !known.includes(rec.company)) known.push(rec.company);
     }
     const byName = (n) => records.find((r) => r.name === n);
 
@@ -94,7 +101,7 @@ app.whenReady().then(async () => {
       if (!r.company) continue;
       const placed = await organize.file(library, {
         source: r.path, company: r.company, folder: FOLDER[r.type],
-        typeLabel: TYPE_LABEL[r.type], date: r.date, ext: r.ext,
+        typeLabel: TYPE_LABEL[r.type], date: r.date, docNumber: r.docNumber, ext: r.ext,
       }, 'copy');
       const doc = db.insertDocument({
         company: r.company, doc_type: r.type, title: placed.name,
@@ -109,14 +116,18 @@ app.whenReady().then(async () => {
 
     const invoicePath = path.join(library, 'Meridian Logistics Sdn Bhd', 'Invoices');
     check('builds Company/Type/File structure', fs.existsSync(invoicePath), invoicePath.replace(library, '…'));
-    check('cleans the file name',
-      fs.readdirSync(invoicePath)[0] === 'Meridian_Logistics_Sdn_Bhd_Invoice_2025-03-14.pdf',
+    check('cleans the file name and carries the reference',
+      fs.readdirSync(invoicePath)[0] === 'Meridian_Logistics_Sdn_Bhd_Invoice_INV-2291_2025-03-14.pdf',
       fs.readdirSync(invoicePath)[0]);
     check('leaves the original in place', fs.existsSync(path.join(desktop, 'INV-2291.pdf')));
 
+    check('LETTERHEAD: the sender is never filed as the client',
+      !records.some((r) => r.company && /northwind industrial/i.test(r.company)),
+      records.map((r) => r.company).join(' | '));
+
     const dupe = await organize.file(library, {
       source: path.join(desktop, 'INV-2291.pdf'), company: 'Meridian Logistics Sdn Bhd',
-      folder: 'Invoices', typeLabel: 'Invoice', date: '2025-03-14', ext: 'pdf',
+      folder: 'Invoices', typeLabel: 'Invoice', date: '2025-03-14', docNumber: 'INV-2291', ext: 'pdf',
     }, 'copy');
     check('never overwrites on collision', dupe.name.endsWith('_2.pdf'), dupe.name);
 

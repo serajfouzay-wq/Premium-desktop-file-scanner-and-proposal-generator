@@ -1,7 +1,7 @@
 {
   "name": "premium-desktop-file-scanner-and-proposal-generator",
-  "productName": "Cabinet",
-  "version": "1.0.0",
+  "productName": "Cabinet 2",
+  "version": "2.0.0",
   "description": "Scans local documents, files them by company, and drafts premium proposals from what it finds.",
   "main": "electron/main.js",
   "author": "Cabinet",
@@ -18,7 +18,8 @@
     "dist:win": "npm run build && npm run verify:desktop && electron-builder --win --x64",
     "build:sample": "node scripts/build-sample.js",
     "build:web": "vite build",
-    "verify:desktop": "node scripts/verify-desktop-build.js"
+    "verify:desktop": "node scripts/verify-desktop-build.js",
+    "test:classify": "node test/classify.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
@@ -45,8 +46,8 @@
     "wait-on": "^8.0.1"
   },
   "build": {
-    "appId": "com.cabinet.desktop",
-    "productName": "Cabinet",
+    "appId": "com.cabinet.desktop.v2",
+    "productName": "Cabinet 2",
     "npmRebuild": false,
     "asar": false,
     "files": [
@@ -65,7 +66,7 @@
       "target": [
         "zip"
       ],
-      "artifactName": "Cabinet-${version}-windows-x64.${ext}",
+      "artifactName": "Cabinet-2-Setup-${version}.${ext}",
       "signAndEditExecutable": false
     },
     "mac": {

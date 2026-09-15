@@ -8,7 +8,11 @@ const { BrowserWindow } = require('electron');
  * PDF is produced by Chromium's own print engine on the exact HTML the preview
  * shows — same layout engine, same fonts, no second rendering path to drift.
  */
-async function exportPDF(html, destination) {
+const escapeHtml = (v) => String(v || '').replace(/[&<>"]/g, (c) => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]
+));
+
+async function exportPDF(html, destination, meta = {}) {
   const win = new BrowserWindow({
     show: false,
     width: 1240,
@@ -36,9 +40,18 @@ async function exportPDF(html, destination) {
       preferCSSPageSize: true,
       displayHeaderFooter: true,
       headerTemplate: '<div></div>',
-      footerTemplate: `<div style="width:100%;font-family:Inter,system-ui,sans-serif;font-size:7pt;
-        color:#8B949A;padding:0 16mm 8mm;display:flex;justify-content:flex-end;">
-        <span class="pageNumber"></span></div>`,
+      // The cover carries its own identity, so the running footer starts after
+      // it — hidden on page one by the CSS below.
+      footerTemplate: `<style>
+          .ft{width:100%;font-family:Inter,'Segoe UI',system-ui,sans-serif;font-size:7pt;
+              color:#8B949A;padding:0 16mm 9mm;display:flex;justify-content:space-between;
+              align-items:baseline;}
+          .ft .l{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;max-width:70%}
+        </style>
+        <div class="ft">
+          <span class="l">${escapeHtml(meta.title || '')}${meta.company ? ` &middot; ${escapeHtml(meta.company)}` : ''}</span>
+          <span><span class="pageNumber"></span> / <span class="totalPages"></span></span>
+        </div>`,
     });
 
     await fs.writeFile(destination, buffer);

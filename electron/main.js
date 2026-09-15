@@ -8,7 +8,7 @@ const db = require('./lib/db');
 const settings = require('./lib/settings');
 const { discover } = require('./lib/scan');
 const { extractText } = require('./lib/extract');
-const { classify, reasonFor, FOLDER, TYPE_LABEL } = require('./lib/classify');
+const { classify, extractCandidates, detectSenders, reasonFor, FOLDER, TYPE_LABEL } = require('./lib/classify');
 const organize = require('./lib/organize');
 const { chunkDocument } = require('./lib/chunk');
 const { generate } = require('./lib/generate');
@@ -220,8 +220,13 @@ handle('scan:start', async (roots) => {
   });
 
   const known = db.listCompanies().map((c) => c.name);
+  const ownCompany = (settings.get().brand || {}).name || null;
   const results = [];
 
+  /* Pass one: open every file and take its text and its company candidates.
+     Nothing is decided yet — who the sender is only becomes obvious once the
+     whole batch has been seen. */
+  const candidateSets = [];
   for (let i = 0; i < readable.length; i++) {
     if (cancelScan) break;
     const f = readable[i];
@@ -231,21 +236,16 @@ handle('scan:start', async (roots) => {
       ...f,
       status: 'read',
       company: null, type: 'other', typeLabel: 'Other', folder: 'Unsorted',
-      confidence: 0, date: null, reason: '', text: '',
+      confidence: 0, date: null, docNumber: null, reason: '', text: '',
     };
 
     try {
       const { text, method } = await extractText(f);
       record.text = text;
       record.method = method;
-      const verdict = classify(text, f.name, known);
-      Object.assign(record, verdict);
-      record.status = verdict.confidence >= 0.70 ? 'ready' : 'review';
-      if (record.status === 'review') record.reason = reasonFor(verdict);
-      if (verdict.company && !known.includes(verdict.company)) known.push(verdict.company);
+      candidateSets.push(extractCandidates(text, f.name).candidates);
     } catch (err) {
-      record.status = 'review';
-      record.reason = err.code === 'encrypted' ? 'Password protected'
+      record.failed = err.code === 'encrypted' ? 'Password protected'
         : err.code === 'no_text' ? 'Looks like a scan with no selectable text'
           : err.message || 'Could not be read';
     }
@@ -256,6 +256,27 @@ handle('scan:start', async (roots) => {
     results.push(record);
     // Yield so progress actually paints between documents.
     await new Promise((r) => setImmediate(r));
+  }
+
+  /* A name that heads several documents in one batch is a sender, not a
+     client — this is what stops a folder of your own invoices filing itself
+     under your own name when Settings is still blank. */
+  const senderNames = detectSenders(candidateSets);
+  send('scan:progress', { phase: 'sorting', total: readable.length, done: readable.length });
+
+  /* Pass two: decide, now that the senders are known. */
+  for (const record of results) {
+    if (record.failed) {
+      record.status = 'review';
+      record.reason = record.failed;
+      delete record.failed;
+      continue;
+    }
+    const verdict = classify(record.text, record.name, { known, ownCompany, senderNames });
+    Object.assign(record, verdict);
+    record.status = verdict.confidence >= 0.62 ? 'ready' : 'review';
+    if (record.status === 'review') record.reason = reasonFor(verdict);
+    if (verdict.company && !known.includes(verdict.company)) known.push(verdict.company);
   }
 
   send('scan:progress', { phase: 'done', total: readable.length, done: results.length });
@@ -292,6 +313,7 @@ async function fileDocument(file) {
     folder: FOLDER[type] || 'Unsorted',
     typeLabel: TYPE_LABEL[type] || 'Document',
     date: file.date,
+    docNumber: file.docNumber,
     ext: file.ext,
   }, cfg.filing.mode);
 
@@ -395,7 +417,10 @@ handle('studio:exportAs', async ({ format, payload }) => {
   });
   if (r.canceled || !r.filePath) return null;
 
-  const out = format === 'pdf' ? await exporters.exportPDF(html, r.filePath)
+  const out = format === 'pdf'
+    ? await exporters.exportPDF(html, r.filePath, {
+      title: payload.draft.title, company: payload.draft.company,
+    })
     : format === 'word' ? await exporters.exportWord(html, r.filePath)
       : await exporters.exportHTML(html, r.filePath);
   return out;
