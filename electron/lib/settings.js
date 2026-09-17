@@ -16,6 +16,9 @@ const DEFAULTS = {
   },
   library: { root: null },      // master database folder
   filing: { mode: 'copy' },     // 'copy' keeps the original where it is; 'move' relocates it
+  /* fast: no OCR, image-only documents go to the tagging queue with a preview.
+     deep: start the recognition engine on demand and read them. */
+  scanner: { mode: 'fast' },
   model: { apiKey: '', model: 'claude-sonnet-5', enabled: false },
 };
 

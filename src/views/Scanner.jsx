@@ -27,6 +27,7 @@ export default function Scanner({ settings, go }) {
 
   const ready = useMemo(() => files.filter((f) => f.status === 'ready'), [files]);
   const review = useMemo(() => files.filter((f) => f.status === 'review'), [files]);
+  const tagging = useMemo(() => files.filter((f) => f.status === 'tagging'), [files]);
   const filed = useMemo(() => files.filter((f) => f.status === 'filed'), [files]);
 
   async function pick(kind) {
@@ -46,6 +47,12 @@ export default function Scanner({ settings, go }) {
   }
 
   const patch = (path, changes) => setFiles((list) => list.map((f) => (f.path === path ? { ...f, ...changes } : f)));
+  const patch2 = patch;
+  // Names already seen in this scan, offered as one-click choices when tagging.
+  const knownCompanies = useMemo(
+    () => [...new Set(files.map((f) => f.company).filter(Boolean))].sort(),
+    [files],
+  );
 
   async function fileOne(file) {
     if (!file.company) { toast('Add a company name so Cabinet knows where to file it.', 'error'); return; }
@@ -160,6 +167,28 @@ export default function Scanner({ settings, go }) {
               Skipped {skipped.unsupported} unsupported, {skipped.system} system or hidden,
               {' '}{skipped.empty} empty and {skipped.oversized} oversized files.
             </p>
+          )}
+
+          {tagging.length > 0 && (
+            <Card
+              className="mb-5"
+              title="Needs tagging"
+              note="Scans with no text layer. Cabinet cannot read them, but you can recognise them — tag and file in one click."
+              right={<span className="chip">{tagging.length}</span>}
+              bodyClass="p-0"
+            >
+              <ul className="grid gap-4 p-5 sm:grid-cols-2 xl:grid-cols-3">
+                {tagging.map((f) => (
+                  <TagCard
+                    key={f.path}
+                    file={f}
+                    companies={knownCompanies}
+                    onChange={(patch) => patch2(f.path, patch)}
+                    onFile={() => fileOne(files.find((x) => x.path === f.path))}
+                  />
+                ))}
+              </ul>
+            </Card>
           )}
 
           {review.length > 0 && (
@@ -279,5 +308,50 @@ function Tree({ files }) {
         );
       })}
     </ul>
+  );
+}
+
+
+/* A scan the app cannot read, shown as a picture so a person can place it.
+   The whole interaction is meant to be: look, recognise, two clicks, done. */
+function TagCard({ file, companies, onChange, onFile }) {
+  return (
+    <li className="overflow-hidden rounded-lg border border-rule bg-paper-raised">
+      <div className="flex h-40 items-center justify-center overflow-hidden border-b border-rule bg-paper-sunk">
+        {file.thumbnail
+          ? <img src={file.thumbnail} alt={`Preview of ${file.name}`} className="h-full w-full object-contain" />
+          : <span className="flex flex-col items-center gap-1.5 text-ink-faint">
+            <Icon name="file" size={22} />
+            <span className="text-[11px]">No preview</span>
+          </span>}
+      </div>
+      <div className="space-y-2.5 p-3.5">
+        <p className="truncate font-mono text-[11.5px]" title={file.path}>{file.name}</p>
+        {file.ocrNote && <p className="text-[11px] leading-relaxed text-brass-deep">{file.ocrNote}</p>}
+
+        {companies.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {companies.slice(0, 4).map((c) => (
+              <button key={c} type="button" onClick={() => onChange({ company: c })}
+                className={`chip transition ${file.company === c ? 'border-ledger/40 bg-ledger-wash text-ledger-deep' : 'hover:border-rule-strong'}`}>
+                {c}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <input className="field" placeholder="Company name" defaultValue={file.company || ''}
+          onChange={(e) => onChange({ company: e.target.value.trim() })}
+          aria-label={`Company for ${file.name}`} />
+        <select className="field" defaultValue={file.type || 'other'}
+          onChange={(e) => onChange({ type: e.target.value })}
+          aria-label={`Document type for ${file.name}`}>
+          {TYPES.map((t) => <option key={t} value={t}>{TYPE_LABEL[t]}</option>)}
+        </select>
+        <Button size="sm" tone="primary" className="w-full" disabled={!file.company} onClick={onFile}>
+          File it
+        </Button>
+      </div>
+    </li>
   );
 }

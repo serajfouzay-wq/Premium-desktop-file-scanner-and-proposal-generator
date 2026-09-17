@@ -50,6 +50,10 @@ export const api = {
     onProgress: (fn) => (isDesktop ? bridge().scan.onProgress(fn) : subscribe(listeners.scan, fn)),
   },
 
+  ocr: {
+    status: () => (isDesktop ? unwrap(bridge().ocr.status()) : demo.ocr.status()),
+    warmUp: () => (isDesktop ? unwrap(bridge().ocr.warmUp()) : demo.ocr.warmUp()),
+  },
   library: {
     companies: () => (isDesktop ? unwrap(bridge().library.companies()) : demo.library.companies()),
     documents: (company) => (isDesktop ? unwrap(bridge().library.documents(company)) : demo.library.documents(company)),
@@ -62,6 +66,17 @@ export const api = {
     remove: (id) => (isDesktop ? unwrap(bridge().library.remove(id)) : demo.library.remove(id)),
   },
 
+  catalog: {
+    templates: () => (isDesktop ? unwrap(bridge().catalog.templates()) : demo.catalog.templates()),
+    locations: () => (isDesktop ? unwrap(bridge().catalog.locations()) : demo.catalog.locations()),
+    hotels: (id) => (isDesktop ? unwrap(bridge().catalog.hotels(id)) : demo.catalog.hotels(id)),
+    mcs: () => (isDesktop ? unwrap(bridge().catalog.mcs()) : demo.catalog.mcs()),
+    activities: (c) => (isDesktop ? unwrap(bridge().catalog.activities(c)) : demo.catalog.activities(c)),
+    logistics: () => (isDesktop ? unwrap(bridge().catalog.logistics()) : demo.catalog.logistics()),
+    quote: (sel) => (isDesktop ? unwrap(bridge().catalog.quote(sel)) : demo.catalog.quote(sel)),
+    preview: (sel) => (isDesktop ? unwrap(bridge().catalog.preview(sel)) : demo.catalog.preview(sel)),
+    exportDeck: (sel) => (isDesktop ? unwrap(bridge().catalog.exportDeck(sel)) : demo.catalog.exportDeck(sel)),
+  },
   studio: {
     generate: (prompt) => (isDesktop
       ? unwrap(bridge().studio.generate(prompt))

@@ -43,12 +43,12 @@ jobs:
           npx electron-builder --win --x64 --publish never
           --config.win.target=nsis
           --config.win.signAndEditExecutable=true
-          --config.win.artifactName="Cabinet-2-Setup-b${{ github.run_number }}.exe"
+          --config.win.artifactName="Cabinet-3-Setup-b${{ github.run_number }}.exe"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Cabinet-2-Windows
+          name: Cabinet-3-Windows
           path: release/*.exe
           if-no-files-found: error
 
@@ -57,10 +57,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          tag="v2-build-${{ github.run_number }}"
+          tag="v3-build-${{ github.run_number }}"
           gh release create "$tag" release/*.exe \
-            --title "Cabinet 2 — Windows build ${{ github.run_number }}" \
-            --notes "Download **Cabinet-2-Setup-b${{ github.run_number }}.exe** below and run it.\n\n          Cabinet 2 installs alongside Cabinet 1 and keeps a separate library, so both can be opened for comparison.
+            --title "Cabinet 3 — Windows build ${{ github.run_number }}" \
+            --notes "Download **Cabinet-3-Setup-b${{ github.run_number }}.exe** below and run it.\n\n          Cabinet 3 installs alongside versions 1 and 2 and keeps a separate library, so all three can be opened for comparison.
 
           Windows will show a blue \"Windows protected your PC\" screen because the
           installer is not code-signed. Click **More info**, then **Run anyway**.

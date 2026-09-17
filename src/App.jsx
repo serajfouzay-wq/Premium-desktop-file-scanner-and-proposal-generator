@@ -6,12 +6,14 @@ import Dashboard from './views/Dashboard';
 import Scanner from './views/Scanner';
 import Library from './views/Library';
 import Studio from './views/Studio';
+import Builder from './views/Builder';
 import Settings from './views/Settings';
 
 const NAV = [
   { id: 'dashboard', label: 'Overview', icon: 'home', hint: 'What Cabinet holds' },
   { id: 'scanner', label: 'Filing desk', icon: 'scan', hint: 'Scan and organise' },
   { id: 'library', label: 'Library', icon: 'library', hint: 'Every filed document' },
+  { id: 'builder', label: 'Build a deck', icon: 'sparkle', hint: 'Catalog to PowerPoint' },
   { id: 'studio', label: 'Write a proposal', icon: 'pen', hint: 'Draft from past work' },
   { id: 'settings', label: 'Settings', icon: 'gear', hint: 'Branding and storage' },
 ];
@@ -68,6 +70,7 @@ export default function App() {
                 {view === 'dashboard' && <Dashboard {...shared} />}
                 {view === 'scanner' && <Scanner {...shared} />}
                 {view === 'library' && <Library {...shared} />}
+                {view === 'builder' && <Builder {...shared} />}
                 {view === 'studio' && <Studio {...shared} />}
                 {view === 'settings' && <Settings {...shared} />}
               </div>

@@ -192,7 +192,14 @@ const getProposal = (id) => {
   return r ? JSON.parse(r.payload) : null;
 };
 
+/* The catalog tables live in the same file and are reached through the same
+   connection, so catalog.js does not open a second one. Named `handle` rather
+   than `engine` because `engine` below already reports which driver is in use,
+   and the getter silently shadowed it. */
+const handle = () => db;
+
 module.exports = {
+  handle,
   init, uid, nowISO,
   upsertCompany, insertDocument, insertChunks,
   listCompanies, listDocuments, getDocument, allChunks,

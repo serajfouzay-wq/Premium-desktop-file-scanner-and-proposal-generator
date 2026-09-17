@@ -1,7 +1,7 @@
 {
   "name": "premium-desktop-file-scanner-and-proposal-generator",
-  "productName": "Cabinet 2",
-  "version": "2.0.0",
+  "productName": "Cabinet 3",
+  "version": "3.0.0",
   "description": "Scans local documents, files them by company, and drafts premium proposals from what it finds.",
   "main": "electron/main.js",
   "author": "Cabinet",
@@ -11,15 +11,21 @@
   "scripts": {
     "dev": "concurrently -k -n VITE,ELECTRON -c cyan,magenta \"vite\" \"wait-on tcp:5273 && cross-env NODE_ENV=development electron .\"",
     "dev:web": "vite",
-    "build": "cross-env ELECTRON_BUILD=1 vite build",
+    "build": "npm run check:shared && cross-env ELECTRON_BUILD=1 vite build",
     "start": "npm run build && npm run verify:desktop && electron .",
     "dist": "npm run build && npm run verify:desktop && electron-builder",
     "test:e2e": "xvfb-run -a electron test/e2e.js",
     "dist:win": "npm run build && npm run verify:desktop && electron-builder --win --x64",
     "build:sample": "node scripts/build-sample.js",
-    "build:web": "vite build",
+    "build:web": "npm run check:shared && vite build",
     "verify:desktop": "node scripts/verify-desktop-build.js",
-    "test:classify": "node test/classify.test.js"
+    "test:classify": "node test/classify.test.js",
+    "test:pricing": "node test/pricing.test.js",
+    "seed:images": "electron scripts/seed-catalog-images.js",
+    "test:deck": "xvfb-run -a electron test/deck.test.js",
+    "build:shared": "node scripts/build-shared.js",
+    "check:shared": "node scripts/build-shared.js --check",
+    "test": "npm run test:pricing && npm run test:classify && npm run test:e2e && npm run test:deck"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
@@ -27,6 +33,8 @@
     "mammoth": "^1.8.0",
     "node-sqlite3-wasm": "^0.8.60",
     "pdfjs-dist": "^4.2.67",
+    "pptxgenjs": "^4.0.1",
+    "tesseract.js": "^7.0.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
@@ -46,8 +54,8 @@
     "wait-on": "^8.0.1"
   },
   "build": {
-    "appId": "com.cabinet.desktop.v2",
-    "productName": "Cabinet 2",
+    "appId": "com.cabinet.desktop.v3",
+    "productName": "Cabinet 3",
     "npmRebuild": false,
     "asar": false,
     "files": [
@@ -66,7 +74,7 @@
       "target": [
         "zip"
       ],
-      "artifactName": "Cabinet-2-Setup-${version}.${ext}",
+      "artifactName": "Cabinet-3-Setup-${version}.${ext}",
       "signAndEditExecutable": false
     },
     "mac": {

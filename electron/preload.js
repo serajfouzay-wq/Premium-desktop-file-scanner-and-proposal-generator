@@ -36,6 +36,10 @@ contextBridge.exposeInMainWorld('cabinet', {
     fileAll: (payload) => invoke('scan:fileAll', payload),
     onProgress: (handler) => on('scan:progress', handler),
   },
+  ocr: {
+    status: () => invoke('ocr:status'),
+    warmUp: () => invoke('ocr:warmUp'),
+  },
   library: {
     companies: () => invoke('library:companies'),
     documents: (company) => invoke('library:documents', company),
@@ -44,6 +48,18 @@ contextBridge.exposeInMainWorld('cabinet', {
     stats: () => invoke('library:stats'),
     setConfidentiality: (id, level) => invoke('library:setConfidentiality', { id, level }),
     remove: (id) => invoke('library:remove', id),
+  },
+  catalog: {
+    templates: () => invoke('catalog:templates'),
+    locations: () => invoke('catalog:locations'),
+    hotels: (locationId) => invoke('catalog:hotels', locationId),
+    mcs: () => invoke('catalog:mcs'),
+    activities: (category) => invoke('catalog:activities', category),
+    logistics: () => invoke('catalog:logistics'),
+    quote: (sel) => invoke('catalog:quote', sel),
+    preview: (sel) => invoke('catalog:preview', sel),
+    exportDeck: (sel) => invoke('catalog:export', sel),
+    decks: () => invoke('catalog:decks'),
   },
   studio: {
     generate: (prompt) => invoke('studio:generate', prompt),

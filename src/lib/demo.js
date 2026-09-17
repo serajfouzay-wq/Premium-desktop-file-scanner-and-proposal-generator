@@ -26,6 +26,11 @@ export const DEMO_SETTINGS = {
     paymentDays: 30,
     defaultTerms: 'Payment due within 30 days of invoice date.',
   },
+  ocr: {
+    status: async () => ({ state: 'idle', installed: true, mode: 'fast', error: null }),
+    warmUp: async () => onlyOnDesktop('Starting the recognition engine'),
+  },
+
   library: { root: 'C:\\Users\\you\\Documents\\Cabinet Library' },
   filing: { mode: 'copy' },
   model: { apiKey: '', model: 'claude-opus-5', enabled: false },
@@ -53,7 +58,8 @@ const SCANNED = [
   { path: 'C:\\Users\\you\\Downloads\\meridian proposal.pdf', name: 'meridian proposal.pdf', ext: 'pdf', bytes: 284_113, status: 'ready', company: 'Meridian Logistics Sdn Bhd', type: 'proposal', typeLabel: 'Proposal', folder: 'Proposals', confidence: 0.81, date: '2025-01-12', reason: '' },
   { path: 'C:\\Users\\you\\Downloads\\Northwind Studios - retainer.docx', name: 'Northwind Studios - retainer.docx', ext: 'docx', bytes: 44_980, status: 'ready', company: 'Northwind Studios Ltd', type: 'proposal', typeLabel: 'Proposal', folder: 'Proposals', confidence: 0.74, date: '2025-05-02', reason: '' },
   { path: 'C:\\Users\\you\\Downloads\\Halden_PO_8841.xlsx', name: 'Halden_PO_8841.xlsx', ext: 'xlsx', bytes: 18_740, status: 'ready', company: 'Halden Group Pte Ltd', type: 'purchase_order', typeLabel: 'Purchase Order', folder: 'Purchase Orders', confidence: 0.72, date: '2025-02-08', reason: '' },
-  { path: 'C:\\Users\\you\\Downloads\\scan_0042.pdf', name: 'scan_0042.pdf', ext: 'pdf', bytes: 402_881, status: 'review', company: null, type: 'other', typeLabel: 'Other', folder: 'Unsorted', confidence: 0.28, date: null, reason: "Couldn't find a company name" },
+  { path: 'C:\\Users\\you\\Downloads\\scan_0042.pdf', name: 'scan_0042.pdf', ext: 'pdf', bytes: 402_881, status: 'tagging', company: null, type: 'other', typeLabel: 'Other', folder: 'Unsorted', confidence: 0, date: null, imageOnly: true, thumbnail: null, reason: 'This is a scan with no readable text' },
+  { path: 'C:\\Users\\you\\Downloads\\quote draft.pdf', name: 'quote draft.pdf', ext: 'pdf', bytes: 88_120, status: 'review', company: null, type: 'quotation', typeLabel: 'Quotation', folder: 'Quotations', confidence: 0.41, date: null, reason: "Couldn't work out which company this belongs to" },
 ];
 
 const DEMO_TRACE = {
@@ -81,6 +87,57 @@ const DEMO_SECTIONS = [
 const onlyOnDesktop = (what) => {
   throw new Error(`${what} needs the desktop app — this is the web preview. Download the installer from the Releases page.`);
 };
+
+const DEMO_CATALOG = {
+  templates: [
+    { id: 'tpl_team', name: 'Team Building Proposal', blurb: 'A day or multi-day programme built around activities, with accommodation and a host.', accent: '#1F6E62' },
+    { id: 'tpl_gala', name: 'Annual Gala Dinner', blurb: 'An evening production: venue, host, entertainment, staging and the full run of show.', accent: '#7E5B13' },
+    { id: 'tpl_conf', name: 'Corporate Conference', blurb: 'Plenary and breakout programme with stage, accommodation and delegate logistics.', accent: '#2C5A78' },
+  ],
+  locations: [
+    { id: 'loc_kl', name: 'Kuala Lumpur', region: 'Klang Valley', blurb: 'The capital, and the easiest arrival point for mixed-origin delegates.', images: [] },
+    { id: 'loc_penang', name: 'Penang', region: 'Northern Corridor', blurb: 'Heritage streets, food, and beach resorts within half an hour of each other.', images: [] },
+    { id: 'loc_langkawi', name: 'Langkawi', region: 'Northern Corridor', blurb: 'Island resorts and duty-free, suited to longer incentive programmes.', images: [] },
+    { id: 'loc_genting', name: 'Genting Highlands', region: 'Klang Valley', blurb: 'Cool highland air an hour from the capital, with large indoor venues.', images: [] },
+    { id: 'loc_melaka', name: 'Melaka', region: 'Southern Corridor', blurb: 'A compact heritage city, strong for short conferences and gala dinners.', images: [] },
+  ],
+  hotels: [
+    { id: 'htl_kl_grand', location_id: 'loc_kl', name: 'The Grand Bintang, Kuala Lumpur', star_rating: 5, address: 'Jalan Sultan Ismail', amenities: 'Pillarless ballroom for 600\nEight breakout rooms\nRooftop pool deck', images: [],
+      rooms: [{ id: 'rm_1', tier: 'Deluxe King', occupancy: 2, nightly_rate: 420 }, { id: 'rm_2', tier: 'Club Twin', occupancy: 2, nightly_rate: 560 }] },
+    { id: 'htl_kl_horizon', location_id: 'loc_kl', name: 'Horizon Suites KLCC', star_rating: 4, address: 'Jalan Pinang', amenities: 'Ballroom for 320\nExecutive lounge', images: [],
+      rooms: [{ id: 'rm_4', tier: 'Superior Twin', occupancy: 2, nightly_rate: 280 }] },
+  ],
+  mcs: [
+    { id: 'mc_1', name: 'Farah Nordin', headline: 'Bilingual corporate host and moderator', bio: 'Fifteen years hosting annual dinners and product launches across the region.', languages: 'English, Bahasa Malaysia, Mandarin', years: 15, day_rate: 4800, images: [] },
+    { id: 'mc_4', name: 'Hafiz Rahman', headline: 'Team building facilitator and emcee', bio: 'Runs the floor for large team building days and doubles as the day host.', languages: 'English, Bahasa Malaysia', years: 8, day_rate: 3200, images: [] },
+  ],
+  activities: [
+    { id: 'act_1', name: 'Amazing Race: Heritage Trail', category: 'team building', summary: 'Teams work through checkpoints across the old town.', duration_mins: 240, pax_min: 20, pax_max: 200, rate_type: 'per_head', rate: 185, indoor: 0, images: [] },
+    { id: 'act_3', name: 'Culinary Face-Off', category: 'team building', summary: 'Teams cook a set menu against the clock, judged by a local chef.', duration_mins: 180, pax_min: 16, pax_max: 80, rate_type: 'per_head', rate: 210, indoor: 1, images: [] },
+    { id: 'act_6', name: 'Awards Night Production', category: 'gala', summary: 'Full evening production with run sheet, stage cues and rehearsal.', duration_mins: 300, pax_min: 50, pax_max: 600, rate_type: 'flat', rate: 18500, indoor: 1, images: [] },
+  ],
+  logistics: [
+    { id: 'log_2', name: 'Compact PA and Microphones', category: 'audio', spec: '4kW system, four wireless handhelds', rate_type: 'per_day', rate: 2400 },
+    { id: 'log_6', name: 'Coach Transfer, 44-seat', category: 'transport', spec: 'Airport and venue transfers', rate_type: 'per_day', rate: 1250 },
+  ],
+};
+
+/* The browser preview runs the real pricing rules, so the totals it shows are
+   the totals the desktop app would produce from the same choices. */
+function demoQuote(sel) {
+  const find = (list, id) => list.find((x) => x.id === id) || null;
+  const hotel = find(DEMO_CATALOG.hotels, sel.hotelId);
+  const room = hotel ? (hotel.rooms.find((r) => r.id === sel.roomId) || null) : null;
+  const resolved = {
+    pax: sel.pax, nights: sel.nights, days: sel.days, roomsOverride: sel.roomsOverride,
+    hotel, room,
+    mc: find(DEMO_CATALOG.mcs, sel.mcId),
+    activities: (sel.activityIds || []).map((id) => find(DEMO_CATALOG.activities, id)).filter(Boolean),
+    logistics: (sel.logisticsIds || []).map((id) => find(DEMO_CATALOG.logistics, id)).filter(Boolean),
+    custom: sel.custom || [],
+  };
+  return { resolved, hotel, room };
+}
 
 export const demo = {
   info: async () => ({ version: '1.0.0', platform: 'web', electron: '—', storage: { engine: 'demo', note: null }, userData: '—' }),
@@ -140,6 +197,38 @@ export const demo = {
     }),
     setConfidentiality: async (id, level) => ({ id, confidentiality: level }),
     remove: async () => true,
+  },
+
+  catalog: {
+    templates: async () => DEMO_CATALOG.templates,
+    locations: async () => DEMO_CATALOG.locations,
+    hotels: async (locationId) => (locationId ? DEMO_CATALOG.hotels.filter((h) => h.location_id === locationId) : DEMO_CATALOG.hotels),
+    mcs: async () => DEMO_CATALOG.mcs,
+    activities: async (c) => (c ? DEMO_CATALOG.activities.filter((a) => a.category === c) : DEMO_CATALOG.activities),
+    logistics: async () => DEMO_CATALOG.logistics,
+    quote: async (sel) => {
+      const { calculate, validate } = await import('./pricing-shared');
+      const { resolved } = demoQuote(sel);
+      return { quote: calculate(resolved, sel.rates || {}), warnings: validate(resolved) };
+    },
+    preview: async (sel) => {
+      const { calculate } = await import('./pricing-shared');
+      const { resolved, hotel, room } = demoQuote(sel);
+      const template = DEMO_CATALOG.templates.find((t) => t.id === sel.templateId);
+      const location = DEMO_CATALOG.locations.find((l) => l.id === sel.locationId) || null;
+      const occ = room ? Math.max(1, room.occupancy || 2) : 2;
+      return {
+        title: sel.title || 'Event Proposal', client: sel.client || '[Client name]',
+        dates: sel.dates || '', templateName: template ? template.name : 'Proposal',
+        accent: template ? template.accent : '#1F6E62',
+        pax: resolved.pax, nights: resolved.nights, location, locationImages: null,
+        hotel, room, roomCount: Math.ceil((resolved.pax || 0) / occ),
+        mc: resolved.mc, activities: resolved.activities, logistics: resolved.logistics,
+        quote: calculate(resolved, sel.rates || {}),
+        slidePlan: ['cover', 'credentials', 'destination', 'hotel', 'mc', 'activities', 'logistics', 'investment', 'terms', 'closing'],
+      };
+    },
+    exportDeck: async () => onlyOnDesktop('Exporting a PowerPoint deck'),
   },
 
   studio: {

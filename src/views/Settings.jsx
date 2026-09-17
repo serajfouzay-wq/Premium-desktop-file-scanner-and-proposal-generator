@@ -7,9 +7,11 @@ export default function Settings({ settings, refreshSettings }) {
   const [form, setForm] = useState(null);
   const [saving, setSaving] = useState(false);
   const [info, setInfo] = useState(null);
+  const [ocrState, setOcrState] = useState(null);
 
   useEffect(() => { if (settings) setForm(structuredClone(settings)); }, [settings]);
   useEffect(() => { if (isDesktop) api.info().then(setInfo).catch(() => {}); }, []);
+  useEffect(() => { api.ocr.status().then(setOcrState).catch(() => {}); }, []);
 
   if (!form) return <div className="px-8 pt-10 text-[13px] text-ink-soft">Loading settings…</div>;
 
@@ -157,6 +159,30 @@ export default function Settings({ settings, refreshSettings }) {
                 </label>
               ))}
             </div>
+          </Card>
+
+          <Card title="Scanned documents" note="Photographs of paper have no text to read." bodyClass="p-5">
+            {[
+              ['fast', 'Fast — no recognition', 'Scans go to a tagging queue with a preview, so you place them yourself. Nothing is downloaded and nothing slows down.'],
+              ['deep', 'Deep — read them with OCR', 'Starts a recognition engine the first time it is needed. It downloads a language model once, then works offline. Slower per document.'],
+            ].map(([value, title, note]) => (
+              <label key={value} className="mb-1.5 flex cursor-pointer items-start gap-2.5 rounded-lg border border-rule p-2.5
+                transition hover:border-rule-strong has-[:checked]:border-ledger has-[:checked]:bg-ledger-wash">
+                <input type="radio" name="scanmode" value={value} className="mt-0.5 h-4 w-4 accent-[#1F6E62]"
+                  checked={(form.scanner || {}).mode === value}
+                  onChange={() => setForm((f) => ({ ...f, scanner: { mode: value } }))} />
+                <span>
+                  <span className="block text-[12.5px] font-semibold">{title}</span>
+                  <span className="block text-[11px] leading-relaxed text-ink-faint">{note}</span>
+                </span>
+              </label>
+            ))}
+            {ocrState && (
+              <p className="mt-2 text-[11px] text-ink-faint">
+                Engine: {ocrState.installed ? 'installed' : 'not installed'} · {ocrState.state}
+                {ocrState.error ? ` · ${ocrState.error}` : ''}
+              </p>
+            )}
           </Card>
 
           <Card title="How your header will look" bodyClass="p-5">

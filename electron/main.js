@@ -11,7 +11,12 @@ const { extractText } = require('./lib/extract');
 const { classify, extractCandidates, detectSenders, reasonFor, FOLDER, TYPE_LABEL } = require('./lib/classify');
 const organize = require('./lib/organize');
 const { chunkDocument } = require('./lib/chunk');
+const ocr = require('./lib/ocr');
 const { generate } = require('./lib/generate');
+const catalog = require('./lib/catalog');
+const catalogImages = require('./lib/catalog-images');
+const pricing = require('./lib/pricing');
+const deck = require('./lib/deck');
 const { renderDocument } = require('./lib/document-template');
 const exporters = require('./lib/exporters');
 
@@ -115,6 +120,18 @@ app.whenReady().then(() => {
   nativeTheme.themeSource = 'light';
   const userData = app.getPath('userData');
   engineInfo = db.init(userData);
+  catalog.init();
+
+  /* A fresh install has vendor records but no photographs, and a deck of empty
+     frames reads as broken. Generated once, in the background, so the window
+     opens immediately. */
+  if (catalog.count('catalog_images') === 0) {
+    const dir = path.join(userData, 'catalog-images');
+    catalogImages.generate(catalog, dir, (done, total) => {
+      send('catalog:seeding', { done, total });
+    }).then((r) => send('catalog:seeding', { done: r.written, total: r.written, finished: true }))
+      .catch((err) => console.error('Catalog images could not be generated:', err.message));
+  }
   // Named after the running app, so version 1 and version 2 file into
   // separate folders and can be compared side by side rather than shuffled
   // into one pile. An existing install keeps whatever it was already set to.
@@ -224,6 +241,7 @@ handle('scan:start', async (roots) => {
 
   const known = db.listCompanies().map((c) => c.name);
   const ownCompany = (settings.get().brand || {}).name || null;
+  const deepMode = ((settings.get().scanner || {}).mode || 'fast') === 'deep';
   const results = [];
 
   /* Pass one: open every file and take its text and its company candidates.
@@ -248,9 +266,34 @@ handle('scan:start', async (roots) => {
       record.method = method;
       candidateSets.push(extractCandidates(text, f.name).candidates);
     } catch (err) {
-      record.failed = err.code === 'encrypted' ? 'Password protected'
-        : err.code === 'no_text' ? 'Looks like a scan with no selectable text'
+      if (err.code === 'no_text') {
+        /* A photograph of paper. In deep mode the recognition engine gets a
+           go at it; in fast mode — and whenever the engine cannot start — it
+           goes to the tagging queue with a picture of itself, which is enough
+           for a person to place it in one click. */
+        record.imageOnly = true;
+        let read = null;
+        if (deepMode) {
+          send('scan:progress', { phase: 'reading', total: readable.length, done: i, current: `Reading ${f.name} with OCR` });
+          read = await ocr.recognise(f.path, f.ext, (p) => send('scan:progress', {
+            phase: 'reading', total: readable.length, done: i,
+            current: `OCR ${f.name}${p.progress ? ` — ${Math.round(p.progress * 100)}%` : ''}`,
+          }));
+        }
+        if (read && read.ok && read.text && read.text.replace(/\s/g, '').length > 40) {
+          record.text = read.text;
+          record.method = 'ocr';
+          record.ocrConfidence = read.confidence;
+          candidateSets.push(extractCandidates(read.text, f.name).candidates);
+        } else {
+          record.failed = 'This is a scan with no readable text';
+          record.ocrNote = read && read.hint ? read.hint : null;
+          record.thumbnail = await ocr.thumbnail(f.path, f.ext);
+        }
+      } else {
+        record.failed = err.code === 'encrypted' ? 'Password protected'
           : err.message || 'Could not be read';
+      }
     }
 
     // Hold the extracted text here rather than shipping it to the renderer;
@@ -270,7 +313,7 @@ handle('scan:start', async (roots) => {
   /* Pass two: decide, now that the senders are known. */
   for (const record of results) {
     if (record.failed) {
-      record.status = 'review';
+      record.status = record.imageOnly ? 'tagging' : 'review';
       record.reason = record.failed;
       delete record.failed;
       continue;
@@ -464,4 +507,103 @@ handle('studio:saveToLibrary', async ({ draft, lineItems, assets }) => {
   db.saveProposal({ company: draft.company, title: draft.title, draft, lineItems });
 
   return { path: dest, id: doc.id };
+});
+
+/* ------------------------------------------------------------- catalog v3 */
+
+handle('catalog:templates', () => catalog.listTemplates().map((t) => ({ ...t, slide_plan: JSON.parse(t.slide_plan) })));
+handle('catalog:locations', () => catalog.listLocations().map((l) => ({ ...l, images: catalog.imagesFor('location', l.id) })));
+handle('catalog:hotels', (locationId) => catalog.listHotels(locationId));
+handle('catalog:mcs', () => catalog.listMcs());
+handle('catalog:activities', (category) => catalog.listActivities(category));
+handle('catalog:logistics', () => catalog.listLogistics());
+handle('catalog:decks', () => catalog.listDecks());
+
+/* Pricing is recalculated in the main process rather than trusted from the
+   renderer, so the number in the deck is always the number this engine
+   produced from catalog rates. */
+const resolveSelections = (sel) => ({
+  pax: sel.pax,
+  nights: sel.nights,
+  days: sel.days,
+  roomsOverride: sel.roomsOverride,
+  hotel: sel.hotelId ? catalog.getHotel(sel.hotelId) : null,
+  room: sel.roomId ? catalog.getRoom(sel.roomId) : null,
+  mc: sel.mcId ? catalog.getMc(sel.mcId) : null,
+  activities: (sel.activityIds || []).map(catalog.getActivity).filter(Boolean),
+  logistics: (sel.logisticsIds || []).map(catalog.getLogistics).filter(Boolean),
+  custom: sel.custom || [],
+});
+
+handle('catalog:quote', (sel) => {
+  const resolved = resolveSelections(sel);
+  return {
+    quote: pricing.calculate(resolved, sel.rates || {}),
+    warnings: pricing.validate(resolved),
+  };
+});
+
+const buildProposal = (sel) => {
+  const resolved = resolveSelections(sel);
+  const template = sel.templateId ? catalog.getTemplate(sel.templateId) : null;
+  const location = sel.locationId ? catalog.getLocation(sel.locationId) : null;
+  const quote = pricing.calculate(resolved, sel.rates || {});
+  const occupancy = resolved.room ? Math.max(1, resolved.room.occupancy || 2) : 2;
+
+  return {
+    title: sel.title || 'Event Proposal',
+    client: sel.client || '[Client name]',
+    dates: sel.dates || '',
+    templateId: sel.templateId,
+    templateName: template ? template.name : 'Proposal',
+    accent: (template && template.accent) || null,
+    pax: resolved.pax,
+    nights: resolved.nights,
+    location,
+    locationImages: location ? { images: catalog.imagesFor('location', location.id) } : null,
+    hotel: resolved.hotel,
+    room: resolved.room,
+    roomCount: Number(sel.roomsOverride) > 0
+      ? Math.floor(Number(sel.roomsOverride)) : Math.ceil((resolved.pax || 0) / occupancy),
+    mc: resolved.mc,
+    activities: resolved.activities,
+    logistics: resolved.logistics,
+    terms: sel.terms || null,
+    quote,
+    slidePlan: template ? JSON.parse(template.slide_plan) : null,
+  };
+};
+
+handle('catalog:preview', (sel) => buildProposal(sel));
+
+handle('catalog:export', async (sel) => {
+  const built = buildProposal(sel);
+  const cfg = settings.get();
+  const root = cfg.library.root;
+  const safe = String(built.client).replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_').slice(0, 50) || 'Client';
+  const stamp = new Date().toISOString().slice(0, 10);
+  const suggested = `${safe}_${String(built.title).replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '_').slice(0, 50)}_${stamp}.pptx`;
+
+  const r = await dialog.showSaveDialog(win, {
+    title: 'Save the proposal deck',
+    defaultPath: path.join(root || app.getPath('documents'), suggested),
+    filters: [{ name: 'PowerPoint', extensions: ['pptx'] }],
+  });
+  if (r.canceled || !r.filePath) return null;
+
+  const brand = cfg.brand || {};
+  const result = await deck.build(built, {
+    name: brand.name, phone: brand.phone, email: brand.email,
+    website: brand.website, accent: brand.accent, blurb: brand.tagline,
+    logoPath: null,
+  }, r.filePath);
+
+  catalog.saveDeck({ ...built, total: built.quote.total, filePath: result.path });
+  return result;
+});
+
+handle('ocr:status', () => ({ ...ocr.status(), mode: (settings.get().scanner || {}).mode || 'fast' }));
+handle('ocr:warmUp', async () => {
+  const r = await ocr.ensureEngine((p) => send('scan:progress', { phase: 'ocr', ...p }));
+  return r;
 });
