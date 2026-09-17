@@ -171,6 +171,55 @@ app.whenReady().then(async () => {
     check('every figure in the deck comes from the catalog or the quote',
       orphans.length === 0, orphans.length ? `unexplained: ${orphans.join(', ')}` : 'no orphan figures');
 
+    /* Structural validation — the closest thing to proving PowerPoint will
+       open the file without offering to repair it. The failures that actually
+       break a deck are a relationship pointing at a part that is not there, a
+       slide using an r:id its own .rels never declares, and a slide the
+       presentation never references. */
+    const posix = path.posix;
+    const partNames = new Set(names);
+    const dangling = [];
+    for (const n of names.filter((x) => x.endsWith('.rels'))) {
+      const base = posix.dirname(posix.dirname(n));
+      const rels = zip[n]().toString();
+      for (const m of rels.matchAll(/Target="([^"]+)"([^>]*)/g)) {
+        if (/TargetMode="External"/.test(m[2])) continue;
+        const resolved = posix.normalize(posix.join(base, m[1])).replace(/^\/+/, '');
+        if (!partNames.has(resolved)) dangling.push(`${n} -> ${m[1]}`);
+      }
+    }
+    check('every relationship points at a part that exists', dangling.length === 0,
+      dangling.slice(0, 3).join(' | ') || `${names.filter((x) => x.endsWith('.rels')).length} rels files checked`);
+
+    const undeclared = [];
+    for (const s of slides) {
+      const relFile = `ppt/slides/_rels/${posix.basename(s)}.rels`;
+      const declared = new Set([...(partNames.has(relFile) ? zip[relFile]().toString() : '')
+        .matchAll(/Id="([^"]+)"/g)].map((m) => m[1]));
+      for (const m of new Set([...zip[s]().toString().matchAll(/r:(?:embed|id|link)="([^"]+)"/g)].map((x) => x[1]))) {
+        if (!declared.has(m)) undeclared.push(`${s}:${m}`);
+      }
+    }
+    check('every image and link a slide uses is declared in its rels',
+      undeclared.length === 0, undeclared.slice(0, 3).join(' | ') || 'all resolved');
+
+    const presRels = zip['ppt/_rels/presentation.xml.rels']().toString();
+    const slideTargets = new Set([...presRels.matchAll(/Target="([^"]*slides\/slide\d+\.xml)"/g)]
+      .map((m) => posix.basename(m[1])));
+    const orphanSlides = slides.filter((s) => !slideTargets.has(posix.basename(s)));
+    check('every slide is referenced by the presentation', orphanSlides.length === 0,
+      orphanSlides.join(' | ') || `${slideTargets.size} referenced`);
+
+    /* pptxgenjs declares one slideMaster content-type override per slide while
+       writing a single master — true of 3.12 and 4.0.1 alike, so it is the
+       library's long-standing behaviour rather than anything this code does.
+       Recorded here so a future reader does not rediscover it as a surprise. */
+    const ctypes = zip['[Content_Types].xml']().toString();
+    const declaredMasters = new Set([...ctypes.matchAll(/slideMaster\d+\.xml/g)].map((m) => m[0])).size;
+    const presentMasters = names.filter((n) => /slideMasters\/slideMaster\d+\.xml$/.test(n)).length;
+    console.log(`  NOTE  pptxgenjs declares ${declaredMasters} slide masters and writes ${presentMasters} —`
+      + ' a known quirk of the library, unchanged between 3.12 and 4.0.1');
+
     fs.copyFileSync(out, path.join(os.tmpdir(), 'cabinet-sample-deck.pptx'));
     console.log(`\n  Sample deck kept at ${path.join(os.tmpdir(), 'cabinet-sample-deck.pptx')}`);
   } catch (err) {
