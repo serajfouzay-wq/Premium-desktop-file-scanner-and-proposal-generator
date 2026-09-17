@@ -34,6 +34,26 @@ app.whenReady().then(async () => {
     check('the second start applies no further migrations',
       Array.isArray(second.migrated) && second.migrated.length === 0, JSON.stringify(second.migrated));
 
+    /* A category added in a later version must arrive populated on an install
+       that already exists, or it shows up as an empty tab with no explanation.
+       Emptying one table and re-initialising stands in for that upgrade. */
+    db.handle().run('DELETE FROM venues', []);
+    const upgraded = catalog.init();
+    check('a newly added category is seeded on an existing install',
+      upgraded.venues > 0 && upgraded.seeded.includes('venues'),
+      `venues ${upgraded.venues}, seeded ${JSON.stringify(upgraded.seeded)}`);
+    check('the tables that were already populated are left alone',
+      upgraded.seeded.length === 1, JSON.stringify(upgraded.seeded));
+
+    /* Samples the user has deliberately removed must not reappear. */
+    // The last one, so the fixture a later check relies on stays put.
+    const venueList = catalog.listVenues();
+    catalog.deleteItem('venues', venueList[venueList.length - 1].id);
+    const afterDelete = catalog.listVenues().length;
+    catalog.init();
+    check('deleted samples are not restored on the next start',
+      catalog.listVenues().length === afterDelete, `${catalog.listVenues().length} vs ${afterDelete}`);
+
     // Seeded items must carry a cost, or margin reporting is meaningless.
     const anMc = catalog.getMc('mc_1');
     check('seeded items carry a cost as well as a price',

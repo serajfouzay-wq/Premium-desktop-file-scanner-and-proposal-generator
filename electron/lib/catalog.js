@@ -147,10 +147,10 @@ function migrate() {
 function init() {
   db.handle().exec(SCHEMA);
   const migrated = migrate();
-  if (!count('proposal_templates')) seed();
+  const seeded = seed();
   return {
     templates: count('proposal_templates'), hotels: count('hotels'),
-    activities: count('activities'), venues: count('venues'), migrated,
+    activities: count('activities'), venues: count('venues'), migrated, seeded,
   };
 }
 
@@ -270,20 +270,31 @@ const VENUES = [
   ['ven_5', 'loc_melaka', 'Riverine Terrace', 'outdoor', 'Riverside terrace for 180 seated, heritage buildings on both banks.', 180, 2200, 3100, 'per_day'],
 ];
 
+/* Seeding is per table, not all-or-nothing.
+   A category added in a later version — venues were — would otherwise arrive
+   as an empty tab on every existing install, because the old check only asked
+   whether *anything* had been seeded. A table is filled only when it is empty,
+   so a user who has deleted the samples does not get them back. */
 function seed() {
-  const insert = (sql, rows) => rows.forEach((r) => run(sql, r));
-  insert('INSERT INTO locations (id,name,region,blurb,sort) VALUES (?,?,?,?,?)', LOCATIONS);
-  insert('INSERT INTO hotels (id,location_id,name,star_rating,address,amenities,notes) VALUES (?,?,?,?,?,?,?)', HOTELS);
-  insert('INSERT INTO hotel_rooms (id,hotel_id,tier,occupancy,nightly_rate,cost_price) VALUES (?,?,?,?,?,?)',
+  const filled = [];
+  const insert = (table, sql, rows) => {
+    if (count(table) > 0) return;
+    rows.forEach((r) => run(sql, r));
+    filled.push(table);
+  };
+  insert('locations', 'INSERT INTO locations (id,name,region,blurb,sort) VALUES (?,?,?,?,?)', LOCATIONS);
+  insert('hotels', 'INSERT INTO hotels (id,location_id,name,star_rating,address,amenities,notes) VALUES (?,?,?,?,?,?,?)', HOTELS);
+  insert('hotel_rooms', 'INSERT INTO hotel_rooms (id,hotel_id,tier,occupancy,nightly_rate,cost_price) VALUES (?,?,?,?,?,?)',
     ROOMS.map((r) => [...r, round2(r[4] * 0.78)]));
-  insert('INSERT INTO mcs (id,name,headline,bio,languages,years,day_rate,cost_price) VALUES (?,?,?,?,?,?,?,?)',
+  insert('mcs', 'INSERT INTO mcs (id,name,headline,bio,languages,years,day_rate,cost_price) VALUES (?,?,?,?,?,?,?,?)',
     MCS.map((m) => [...m, round2(m[6] * 0.80)]));
-  insert('INSERT INTO activities (id,name,category,summary,duration_mins,pax_min,pax_max,rate_type,rate,gear,indoor,cost_price) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+  insert('activities', 'INSERT INTO activities (id,name,category,summary,duration_mins,pax_min,pax_max,rate_type,rate,gear,indoor,cost_price) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
     ACTIVITIES.map((a) => [...a, round2(a[8] * 0.72)]));
-  insert('INSERT INTO logistics (id,name,category,spec,rate_type,rate,cost_price) VALUES (?,?,?,?,?,?,?)',
+  insert('logistics', 'INSERT INTO logistics (id,name,category,spec,rate_type,rate,cost_price) VALUES (?,?,?,?,?,?,?)',
     LOGISTICS.map((l) => [...l, round2(l[5] * 0.70)]));
-  insert('INSERT INTO venues (id,location_id,name,kind,description,capacity,cost_price,client_price,rate_type) VALUES (?,?,?,?,?,?,?,?,?)', VENUES);
-  insert('INSERT INTO proposal_templates (id,name,blurb,accent,slide_plan,sort) VALUES (?,?,?,?,?,?)', TEMPLATES);
+  insert('venues', 'INSERT INTO venues (id,location_id,name,kind,description,capacity,cost_price,client_price,rate_type) VALUES (?,?,?,?,?,?,?,?,?)', VENUES);
+  return filled;
+  insert('proposal_templates', 'INSERT INTO proposal_templates (id,name,blurb,accent,slide_plan,sort) VALUES (?,?,?,?,?,?)', TEMPLATES);
 }
 
 /* ----------------------------------------------------------------- reads */
