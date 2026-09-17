@@ -220,6 +220,51 @@ app.whenReady().then(async () => {
     console.log(`  NOTE  pptxgenjs declares ${declaredMasters} slide masters and writes ${presentMasters} —`
       + ' a known quirk of the library, unchanged between 3.12 and 4.0.1');
 
+    /* The layout must genuinely react to the count, not just claim to. */
+    const buildWith = async (activityIds, file) => {
+      const acts = activityIds.map(catalog.getActivity);
+      const sel2 = { ...selections, activities: acts };
+      const b = { ...built, activities: acts, quote: pricing.calculate(sel2, { serviceChargePct: 10, taxPct: 8 }) };
+      await deck.build(b, { name: 'Northwind Events', accent: '#1F6E62' }, file);
+      const z = readZip(file);
+      const names2 = Object.keys(z).filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n));
+      return { zip: z, slides: names2 };
+    };
+
+    const one = await buildWith(['act_1'], path.join(tmp, 'one.pptx'));
+    const three = await buildWith(['act_1', 'act_3', 'act_5'], path.join(tmp, 'three.pptx'));
+    const seven = await buildWith(['act_1', 'act_2', 'act_3', 'act_4', 'act_5', 'act_6', 'act_7'], path.join(tmp, 'seven.pptx'));
+
+    check('one activity produces one activity slide',
+      one.slides.length === three.slides.length, `${one.slides.length} vs ${three.slides.length}`);
+    check('seven activities spill onto a second activity slide',
+      seven.slides.length === three.slides.length + 1,
+      `${seven.slides.length} vs ${three.slides.length}`);
+
+    /* Column count is visible in the geometry: pptxgenjs writes positions in
+       EMU, so three cards on a slide means three distinct x offsets. */
+    const xsOf = (z, slideNames) => {
+      const text = slideNames.map((n) => z[n]().toString()).join('');
+      return new Set([...text.matchAll(/<a:off x="(\d+)"/g)].map((m) => m[1]));
+    };
+    const threeActivity = three.slides.filter((n) => /programme/i.test(three.zip[n]().toString()));
+    const oneActivity = one.slides.filter((n) => /programme/i.test(one.zip[n]().toString()));
+    check('a single activity uses a wider layout than three',
+      xsOf(one.zip, oneActivity).size < xsOf(three.zip, threeActivity).size,
+      `1 item: ${xsOf(one.zip, oneActivity).size} x-offsets · 3 items: ${xsOf(three.zip, threeActivity).size}`);
+
+    /* Cost must never reach a client-facing slide. */
+    const costed = pricing.calculate(selections, { serviceChargePct: 10, taxPct: 8 });
+    const costFigures = [...new Set(costed.lines
+      .filter((l) => l.costAmount > 0)
+      .flatMap((l) => [fmt(l.unitCost), fmt(l.costAmount)]))];
+    const leaked = costFigures.filter((c) => c !== '0.00' && allText.includes(c));
+    check('COST FIREWALL: no internal cost appears on any slide',
+      leaked.length === 0, leaked.length ? `leaked: ${leaked.join(', ')}` : `${costFigures.length} cost figures checked`);
+    check('COST FIREWALL: the client projection carries no cost fields',
+      Object.keys(pricing.clientFacing(costed).lines[0]).every((k) => !/cost/i.test(k))
+      && !('internal' in pricing.clientFacing(costed)));
+
     fs.copyFileSync(out, path.join(os.tmpdir(), 'cabinet-sample-deck.pptx'));
     console.log(`\n  Sample deck kept at ${path.join(os.tmpdir(), 'cabinet-sample-deck.pptx')}`);
   } catch (err) {

@@ -229,6 +229,16 @@ export const demo = {
       };
     },
     exportDeck: async () => onlyOnDesktop('Exporting a PowerPoint deck'),
+    venues: async () => [
+      { id: 'ven_1', name: 'Bintang Grand Ballroom', kind: 'ballroom', capacity: 600, cost_price: 6200, client_price: 8500, rate_type: 'per_day', description: 'Pillarless, 600 theatre or 400 banquet.', images: [] },
+      { id: 'ven_3', name: 'Ferringhi Beach Lawn', kind: 'outdoor', capacity: 400, cost_price: 4100, client_price: 5800, rate_type: 'per_day', description: 'Sunset-facing lawn with an indoor alternative on standby.', images: [] },
+    ],
+    create: async () => onlyOnDesktop('Adding catalog items'),
+    update: async () => onlyOnDesktop('Editing catalog items'),
+    remove: async () => onlyOnDesktop('Removing catalog items'),
+    importImages: async () => onlyOnDesktop('Adding photographs'),
+    removeImage: async () => onlyOnDesktop('Removing photographs'),
+    imageData: async () => null,
   },
 
   studio: {

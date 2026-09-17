@@ -60,6 +60,13 @@ contextBridge.exposeInMainWorld('cabinet', {
     preview: (sel) => invoke('catalog:preview', sel),
     exportDeck: (sel) => invoke('catalog:export', sel),
     decks: () => invoke('catalog:decks'),
+    venues: (locationId) => invoke('catalog:venues', locationId),
+    create: (table, values) => invoke('catalog:create', { table, values }),
+    update: (table, id, values) => invoke('catalog:update', { table, id, values }),
+    remove: (table, id) => invoke('catalog:delete', { table, id }),
+    importImages: (ownerType, ownerId, caption) => invoke('catalog:importImages', { ownerType, ownerId, caption }),
+    removeImage: (id, deleteFile) => invoke('catalog:removeImage', { id, deleteFile }),
+    imageData: (p) => invoke('catalog:imageData', p),
   },
   studio: {
     generate: (prompt) => invoke('studio:generate', prompt),

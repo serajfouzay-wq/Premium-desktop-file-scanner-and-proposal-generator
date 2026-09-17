@@ -76,6 +76,13 @@ export const api = {
     quote: (sel) => (isDesktop ? unwrap(bridge().catalog.quote(sel)) : demo.catalog.quote(sel)),
     preview: (sel) => (isDesktop ? unwrap(bridge().catalog.preview(sel)) : demo.catalog.preview(sel)),
     exportDeck: (sel) => (isDesktop ? unwrap(bridge().catalog.exportDeck(sel)) : demo.catalog.exportDeck(sel)),
+    venues: (id) => (isDesktop ? unwrap(bridge().catalog.venues(id)) : demo.catalog.venues(id)),
+    create: (t, v) => (isDesktop ? unwrap(bridge().catalog.create(t, v)) : demo.catalog.create(t, v)),
+    update: (t, id, v) => (isDesktop ? unwrap(bridge().catalog.update(t, id, v)) : demo.catalog.update(t, id, v)),
+    remove: (t, id) => (isDesktop ? unwrap(bridge().catalog.remove(t, id)) : demo.catalog.remove(t, id)),
+    importImages: (ot, oid, c) => (isDesktop ? unwrap(bridge().catalog.importImages(ot, oid, c)) : demo.catalog.importImages()),
+    removeImage: (id, del) => (isDesktop ? unwrap(bridge().catalog.removeImage(id, del)) : demo.catalog.removeImage()),
+    imageData: (p) => (isDesktop ? unwrap(bridge().catalog.imageData(p)) : demo.catalog.imageData(p)),
   },
   studio: {
     generate: (prompt) => (isDesktop

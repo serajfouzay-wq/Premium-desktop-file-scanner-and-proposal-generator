@@ -24,7 +24,7 @@ const money = (n) => fmtMoney(n, 'RM ');
 export default function Builder({ settings }) {
   const toast = useToast();
   const [step, setStep] = useState(1);
-  const [catalog, setCatalog] = useState({ templates: [], locations: [], hotels: [], mcs: [], activities: [], logistics: [] });
+  const [catalog, setCatalog] = useState({ templates: [], locations: [], hotels: [], venues: [], mcs: [], activities: [], logistics: [] });
   const [loading, setLoading] = useState(true);
   const [quote, setQuote] = useState(null);
   const [warnings, setWarnings] = useState([]);
@@ -35,7 +35,7 @@ export default function Builder({ settings }) {
     templateId: null, locationId: null,
     client: '', title: '', dates: '',
     pax: 50, nights: 2, days: 3,
-    hotelId: null, roomId: null, mcId: null,
+    hotelId: null, roomId: null, mcId: null, venueId: null,
     activityIds: [], logisticsIds: [],
     rates: { serviceChargePct: 10, taxPct: 8, marginPct: 0 },
   });
@@ -56,8 +56,8 @@ export default function Builder({ settings }) {
 
   useEffect(() => {
     if (!sel.locationId) return;
-    api.catalog.hotels(sel.locationId)
-      .then((hotels) => setCatalog((c) => ({ ...c, hotels })))
+    Promise.all([api.catalog.hotels(sel.locationId), api.catalog.venues(sel.locationId)])
+      .then(([hotels, venues]) => setCatalog((c) => ({ ...c, hotels, venues })))
       .catch((err) => toast(err.message, 'error'));
   }, [sel.locationId, toast]);
 
@@ -183,6 +183,27 @@ export default function Builder({ settings }) {
                 <Field label="Attending (pax)" type="number" value={sel.pax} onChange={(v) => set({ pax: Number(v) || 0 })} />
                 <Field label="Nights" type="number" value={sel.nights} onChange={(v) => set({ nights: Number(v) || 0 })} />
                 <Field label="Event days" type="number" value={sel.days} onChange={(v) => set({ days: Number(v) || 1 })} />
+              </Card>
+
+              <Card title="Venue" note={`${catalog.venues.length} in this destination`} bodyClass="p-0">
+                <ul className="divide-y divide-rule">
+                  {catalog.venues.map((v) => (
+                    <li key={v.id}>
+                      <label className="flex cursor-pointer items-start gap-3 p-4">
+                        <input type="radio" name="venue" className="mt-1 h-4 w-4 accent-[#1F6E62]"
+                          checked={sel.venueId === v.id} onChange={() => set({ venueId: v.id })} />
+                        <span className="min-w-0 flex-1">
+                          <span className="text-[14px] font-semibold">{v.name}</span>
+                          <span className="mt-0.5 block text-[12px] text-ink-soft">{v.description}</span>
+                          <span className="mt-1 block text-[11.5px] text-ink-faint">{v.kind} · up to {v.capacity} guests</span>
+                        </span>
+                        <span className="shrink-0 text-[12.5px] font-semibold">{money(v.client_price)}
+                          <span className="block text-[10.5px] font-normal text-ink-faint">per day</span></span>
+                      </label>
+                    </li>
+                  ))}
+                  {catalog.venues.length === 0 && <li className="p-4 text-[12.5px] text-ink-faint">No venues listed for this destination yet — add them in Inventory.</li>}
+                </ul>
               </Card>
 
               <Card title="Hotel" note={`${catalog.hotels.length} in this destination`} bodyClass="p-0">
@@ -323,11 +344,32 @@ const Field = ({ label, value, onChange, type = 'text', className = '', placehol
   </label>
 );
 
-const Picker = ({ title, items, selected, onToggle, describe, priceOf }) => (
-  <Card title={title} note={`${selected.length} selected`} bodyClass="p-0">
-    {items.length === 0 ? <Empty icon="folder" title="Nothing in the catalog yet" /> : (
+function Picker({ title, items, selected, onToggle, describe, priceOf }) {
+  const [q, setQ] = useState('');
+  const term = q.trim().toLowerCase();
+  // Selected items always stay visible, so filtering can never hide a choice
+  // the user has already made and left them unable to undo it.
+  const shown = term
+    ? items.filter((i) => selected.includes(i.id)
+      || `${i.name} ${describe(i) || ''} ${i.category || ''}`.toLowerCase().includes(term))
+    : items;
+
+  return (
+  <Card
+    title={title}
+    note={`${selected.length} selected of ${items.length}`}
+    right={items.length > 4 ? (
+      <label className="relative">
+        <Icon name="search" size={14} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink-faint" />
+        <input className="field w-[190px] py-1.5 pl-7 text-[12px]" placeholder="Search"
+          value={q} onChange={(e) => setQ(e.target.value)} aria-label={`Search ${title}`} />
+      </label>
+    ) : null}
+    bodyClass="p-0"
+  >
+    {shown.length === 0 ? <Empty icon="search" title="Nothing matches" /> : (
       <ul className="divide-y divide-rule">
-        {items.map((it) => (
+        {shown.map((it) => (
           <li key={it.id}>
             <label className="flex cursor-pointer items-start gap-3 p-4">
               <input type="checkbox" className="mt-1 h-4 w-4 accent-[#1F6E62]"
@@ -343,4 +385,5 @@ const Picker = ({ title, items, selected, onToggle, describe, priceOf }) => (
       </ul>
     )}
   </Card>
-);
+  );
+}

@@ -530,6 +530,7 @@ const resolveSelections = (sel) => ({
   hotel: sel.hotelId ? catalog.getHotel(sel.hotelId) : null,
   room: sel.roomId ? catalog.getRoom(sel.roomId) : null,
   mc: sel.mcId ? catalog.getMc(sel.mcId) : null,
+  venue: sel.venueId ? catalog.getVenue(sel.venueId) : null,
   activities: (sel.activityIds || []).map(catalog.getActivity).filter(Boolean),
   logistics: (sel.logisticsIds || []).map(catalog.getLogistics).filter(Boolean),
   custom: sel.custom || [],
@@ -561,6 +562,7 @@ const buildProposal = (sel) => {
     nights: resolved.nights,
     location,
     locationImages: location ? { images: catalog.imagesFor('location', location.id) } : null,
+    venue: resolved.venue,
     hotel: resolved.hotel,
     room: resolved.room,
     roomCount: Number(sel.roomsOverride) > 0
@@ -606,4 +608,80 @@ handle('ocr:status', () => ({ ...ocr.status(), mode: (settings.get().scanner || 
 handle('ocr:warmUp', async () => {
   const r = await ocr.ensureEngine((p) => send('scan:progress', { phase: 'ocr', ...p }));
   return r;
+});
+
+/* ------------------------------------------------ catalog administration */
+
+const CATALOG_TABLES = ['hotels', 'hotel_rooms', 'mcs', 'activities', 'logistics', 'venues', 'locations'];
+const assertTable = (t) => {
+  if (!CATALOG_TABLES.includes(t)) throw new Error(`${t} is not a catalog table.`);
+  return t;
+};
+
+handle('catalog:venues', (locationId) => catalog.listVenues(locationId));
+
+handle('catalog:create', ({ table, values }) => catalog.createItem(assertTable(table), values || {}));
+handle('catalog:update', ({ table, id, values }) => catalog.updateItem(assertTable(table), id, values || {}));
+handle('catalog:delete', ({ table, id }) => {
+  const item = assertTable(table);
+  /* The row goes; the picture files stay. Deleting a vendor should not silently
+     destroy photographs that may be the only copy. */
+  return catalog.deleteItem(item, id);
+});
+
+const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
+
+/* Pictures are copied into the app's own folder rather than referenced where
+   they sit. A catalog pointing at someone's Desktop breaks the first time a
+   file is tidied away, and the deck would silently lose its photographs. */
+handle('catalog:importImages', async ({ ownerType, ownerId, caption }) => {
+  const r = await dialog.showOpenDialog(win, {
+    title: 'Choose photographs',
+    filters: [{ name: 'Images', extensions: IMAGE_EXT }],
+    properties: ['openFile', 'multiSelections'],
+  });
+  if (r.canceled || !r.filePaths.length) return [];
+
+  const dir = path.join(app.getPath('userData'), 'catalog-images');
+  await fsp.mkdir(dir, { recursive: true });
+
+  const added = [];
+  for (const source of r.filePaths) {
+    const ext = path.extname(source).slice(1).toLowerCase();
+    if (!IMAGE_EXT.includes(ext)) continue;
+    const st = await fsp.stat(source);
+    if (st.size > 12 * 1024 * 1024) throw new Error(`${path.basename(source)} is larger than 12 MB.`);
+
+    const safe = path.basename(source, path.extname(source))
+      .replace(/[^\w-]+/g, '_').slice(0, 40) || 'image';
+    const target = path.join(dir, `${ownerType}_${ownerId}_${Date.now().toString(36)}_${safe}.${ext}`);
+    await fsp.copyFile(source, target);
+
+    const existing = catalog.imagesFor(ownerType, ownerId).length;
+    const id = catalog.addImage(ownerType, ownerId, target, caption || null, existing);
+    added.push({ id, path: target });
+  }
+  return added;
+});
+
+handle('catalog:removeImage', ({ id, deleteFile }) => {
+  const img = catalog.getImage(id);
+  if (!img) return false;
+  catalog.removeImage(id);
+  // Only files this app copied in are ever deleted from disk.
+  if (deleteFile && img.path.startsWith(path.join(app.getPath('userData'), 'catalog-images'))) {
+    try { fs.unlinkSync(img.path); } catch { /* already gone */ }
+  }
+  return true;
+});
+
+/* The renderer cannot read file:// paths under a strict page, so pictures are
+   handed over as data URIs for preview purposes only. */
+handle('catalog:imageData', (imagePath) => {
+  if (!imagePath || !fs.existsSync(imagePath)) return null;
+  const ext = path.extname(imagePath).slice(1).toLowerCase();
+  const buf = fs.readFileSync(imagePath);
+  if (buf.length > 8 * 1024 * 1024) return null;
+  const mime = ext === 'jpg' ? 'jpeg' : ext === 'svg' ? 'svg+xml' : ext;
+  return `data:image/${mime};base64,${buf.toString('base64')}`;
 });

@@ -72,6 +72,19 @@ CREATE TABLE IF NOT EXISTS logistics (
   rate       REAL NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS venues (
+  id           TEXT PRIMARY KEY,
+  location_id  TEXT,
+  name         TEXT NOT NULL,
+  kind         TEXT,                       -- ballroom, function room, outdoor
+  description  TEXT,
+  capacity     INTEGER,
+  cost_price   REAL NOT NULL DEFAULT 0,    -- what it costs us
+  client_price REAL NOT NULL DEFAULT 0,    -- what the client is shown
+  rate_type    TEXT NOT NULL DEFAULT 'per_day',
+  FOREIGN KEY (location_id) REFERENCES locations(id)
+);
+
 CREATE TABLE IF NOT EXISTS catalog_images (
   id         TEXT PRIMARY KEY,
   owner_type TEXT NOT NULL,                -- hotel | room | mc | activity | location
@@ -106,10 +119,39 @@ CREATE INDEX IF NOT EXISTS idx_rooms_hotel     ON hotel_rooms(hotel_id);
 CREATE INDEX IF NOT EXISTS idx_images_owner    ON catalog_images(owner_type, owner_id);
 `;
 
+/* Adding a column to a table that already holds a user's data is a migration,
+   not a schema edit. Each is checked before it is applied, so starting the app
+   twice does not fail the second time. */
+const MIGRATIONS = [
+  ['hotel_rooms', 'cost_price', 'REAL NOT NULL DEFAULT 0', 'nightly_rate'],
+  ['mcs', 'cost_price', 'REAL NOT NULL DEFAULT 0', 'day_rate'],
+  ['activities', 'cost_price', 'REAL NOT NULL DEFAULT 0', 'rate'],
+  ['logistics', 'cost_price', 'REAL NOT NULL DEFAULT 0', 'rate'],
+];
+
+function migrate() {
+  const applied = [];
+  for (const [table, column, type, backfillFrom] of MIGRATIONS) {
+    const cols = db.handle().all(`PRAGMA table_info(${table})`).map((c) => c.name);
+    if (cols.includes(column)) continue;
+    db.handle().run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`, []);
+    /* Backfilled from the existing rate, which means zero margin. A markup
+       nobody entered is a number nobody checked, and this system exists to not
+       produce those. The user sets the real cost in the catalog dashboard. */
+    if (backfillFrom) db.handle().run(`UPDATE ${table} SET ${column} = ${backfillFrom}`, []);
+    applied.push(`${table}.${column}`);
+  }
+  return applied;
+}
+
 function init() {
   db.handle().exec(SCHEMA);
+  const migrated = migrate();
   if (!count('proposal_templates')) seed();
-  return { templates: count('proposal_templates'), hotels: count('hotels'), activities: count('activities') };
+  return {
+    templates: count('proposal_templates'), hotels: count('hotels'),
+    activities: count('activities'), venues: count('venues'), migrated,
+  };
 }
 
 const count = (table) => (db.handle().get(`SELECT COUNT(*) AS n FROM ${table}`) || {}).n || 0;
@@ -209,23 +251,38 @@ const LOGISTICS = [
 const TEMPLATES = [
   ['tpl_team', 'Team Building Proposal',
     'A day or multi-day programme built around activities, with accommodation and a host.',
-    '#1F6E62', JSON.stringify(['cover', 'credentials', 'destination', 'hotel', 'mc', 'activities', 'logistics', 'investment', 'terms', 'closing']), 1],
+    '#1F6E62', JSON.stringify(['cover', 'credentials', 'destination', 'venue', 'hotel', 'mc', 'activities', 'logistics', 'investment', 'terms', 'closing']), 1],
   ['tpl_gala', 'Annual Gala Dinner',
     'An evening production: venue, host, entertainment, staging and the full run of show.',
-    '#7E5B13', JSON.stringify(['cover', 'credentials', 'destination', 'hotel', 'mc', 'activities', 'logistics', 'investment', 'terms', 'closing']), 2],
+    '#7E5B13', JSON.stringify(['cover', 'credentials', 'destination', 'venue', 'hotel', 'mc', 'activities', 'logistics', 'investment', 'terms', 'closing']), 2],
   ['tpl_conf', 'Corporate Conference',
     'Plenary and breakout programme with stage, accommodation and delegate logistics.',
-    '#2C5A78', JSON.stringify(['cover', 'credentials', 'destination', 'hotel', 'mc', 'activities', 'logistics', 'investment', 'terms', 'closing']), 3],
+    '#2C5A78', JSON.stringify(['cover', 'credentials', 'destination', 'venue', 'hotel', 'mc', 'activities', 'logistics', 'investment', 'terms', 'closing']), 3],
+];
+
+const round2 = (n) => Math.round(Number(n) * 100) / 100;
+
+const VENUES = [
+  ['ven_1', 'loc_kl', 'Bintang Grand Ballroom', 'ballroom', 'Pillarless, 600 theatre or 400 banquet, with a 9m stage wall.', 600, 6200, 8500, 'per_day'],
+  ['ven_2', 'loc_kl', 'Horizon Function Suite', 'function room', 'Divisible into three, natural light on two sides.', 320, 2800, 3900, 'per_day'],
+  ['ven_3', 'loc_penang', 'Ferringhi Beach Lawn', 'outdoor', 'Sunset-facing lawn with a covered indoor alternative held on standby.', 400, 4100, 5800, 'per_day'],
+  ['ven_4', 'loc_genting', 'Summit Convention Hall', 'ballroom', 'The largest indoor space on the hill, 1,200 theatre style.', 1200, 9400, 13200, 'per_day'],
+  ['ven_5', 'loc_melaka', 'Riverine Terrace', 'outdoor', 'Riverside terrace for 180 seated, heritage buildings on both banks.', 180, 2200, 3100, 'per_day'],
 ];
 
 function seed() {
   const insert = (sql, rows) => rows.forEach((r) => run(sql, r));
   insert('INSERT INTO locations (id,name,region,blurb,sort) VALUES (?,?,?,?,?)', LOCATIONS);
   insert('INSERT INTO hotels (id,location_id,name,star_rating,address,amenities,notes) VALUES (?,?,?,?,?,?,?)', HOTELS);
-  insert('INSERT INTO hotel_rooms (id,hotel_id,tier,occupancy,nightly_rate) VALUES (?,?,?,?,?)', ROOMS);
-  insert('INSERT INTO mcs (id,name,headline,bio,languages,years,day_rate) VALUES (?,?,?,?,?,?,?)', MCS);
-  insert('INSERT INTO activities (id,name,category,summary,duration_mins,pax_min,pax_max,rate_type,rate,gear,indoor) VALUES (?,?,?,?,?,?,?,?,?,?,?)', ACTIVITIES);
-  insert('INSERT INTO logistics (id,name,category,spec,rate_type,rate) VALUES (?,?,?,?,?,?)', LOGISTICS);
+  insert('INSERT INTO hotel_rooms (id,hotel_id,tier,occupancy,nightly_rate,cost_price) VALUES (?,?,?,?,?,?)',
+    ROOMS.map((r) => [...r, round2(r[4] * 0.78)]));
+  insert('INSERT INTO mcs (id,name,headline,bio,languages,years,day_rate,cost_price) VALUES (?,?,?,?,?,?,?,?)',
+    MCS.map((m) => [...m, round2(m[6] * 0.80)]));
+  insert('INSERT INTO activities (id,name,category,summary,duration_mins,pax_min,pax_max,rate_type,rate,gear,indoor,cost_price) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+    ACTIVITIES.map((a) => [...a, round2(a[8] * 0.72)]));
+  insert('INSERT INTO logistics (id,name,category,spec,rate_type,rate,cost_price) VALUES (?,?,?,?,?,?,?)',
+    LOGISTICS.map((l) => [...l, round2(l[5] * 0.70)]));
+  insert('INSERT INTO venues (id,location_id,name,kind,description,capacity,cost_price,client_price,rate_type) VALUES (?,?,?,?,?,?,?,?,?)', VENUES);
   insert('INSERT INTO proposal_templates (id,name,blurb,accent,slide_plan,sort) VALUES (?,?,?,?,?,?)', TEMPLATES);
 }
 
@@ -247,6 +304,14 @@ const listActivities = (category) => all(
   category ? [category] : [],
 ).map((a) => ({ ...a, images: imagesFor('activity', a.id) }));
 const listLogistics = () => all('SELECT * FROM logistics ORDER BY category, name');
+const listVenues = (locationId) => all(
+  locationId ? 'SELECT * FROM venues WHERE location_id = ? ORDER BY capacity DESC' : 'SELECT * FROM venues ORDER BY name',
+  locationId ? [locationId] : [],
+).map((v) => ({ ...v, images: imagesFor('venue', v.id) }));
+const getVenue = (id) => {
+  const v = get('SELECT * FROM venues WHERE id = ?', [id]);
+  return v ? { ...v, images: imagesFor('venue', v.id) } : null;
+};
 
 const imagesFor = (ownerType, ownerId) => all(
   'SELECT * FROM catalog_images WHERE owner_type = ? AND owner_id = ? ORDER BY sort', [ownerType, ownerId],
@@ -287,7 +352,61 @@ function saveDeck(deck) {
 }
 const listDecks = () => all('SELECT id, client, title, total, file_path, created_at FROM decks ORDER BY created_at DESC LIMIT 50');
 
+/* ------------------------------------------------- create, edit, remove --- */
+
+/* One writer for every catalog table, with an explicit column list per kind.
+   A generic "write whatever the renderer sent" would let the interface put
+   anything into any column. */
+const WRITABLE = {
+  hotels: ['location_id', 'name', 'star_rating', 'address', 'amenities', 'notes'],
+  hotel_rooms: ['hotel_id', 'tier', 'occupancy', 'nightly_rate', 'cost_price'],
+  mcs: ['name', 'headline', 'bio', 'languages', 'years', 'day_rate', 'cost_price'],
+  activities: ['name', 'category', 'summary', 'duration_mins', 'pax_min', 'pax_max', 'rate_type', 'rate', 'gear', 'indoor', 'cost_price'],
+  logistics: ['name', 'category', 'spec', 'rate_type', 'rate', 'cost_price'],
+  venues: ['location_id', 'name', 'kind', 'description', 'capacity', 'cost_price', 'client_price', 'rate_type'],
+  locations: ['name', 'region', 'blurb', 'sort'],
+};
+
+const PREFIX = {
+  hotels: 'htl_', hotel_rooms: 'rm_', mcs: 'mc_', activities: 'act_',
+  logistics: 'log_', venues: 'ven_', locations: 'loc_',
+};
+
+function createItem(table, values) {
+  const cols = WRITABLE[table];
+  if (!cols) throw new Error(`${table} is not an editable catalog table.`);
+  const id = db.uid(PREFIX[table] || 'itm_');
+  const used = cols.filter((c) => values[c] !== undefined);
+  run(`INSERT INTO ${table} (id${used.length ? `,${used.join(',')}` : ''}) VALUES (?${used.map(() => ',?').join('')})`,
+    [id, ...used.map((c) => values[c])]);
+  return id;
+}
+
+function updateItem(table, id, values) {
+  const cols = WRITABLE[table];
+  if (!cols) throw new Error(`${table} is not an editable catalog table.`);
+  const used = cols.filter((c) => values[c] !== undefined);
+  if (!used.length) return id;
+  run(`UPDATE ${table} SET ${used.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`,
+    [...used.map((c) => values[c]), id]);
+  return id;
+}
+
+function deleteItem(table, id) {
+  if (!WRITABLE[table]) throw new Error(`${table} is not an editable catalog table.`);
+  const owner = { hotels: 'hotel', mcs: 'mc', activities: 'activity', venues: 'venue', locations: 'location' }[table];
+  if (owner) run('DELETE FROM catalog_images WHERE owner_type = ? AND owner_id = ?', [owner, id]);
+  if (table === 'hotels') run('DELETE FROM hotel_rooms WHERE hotel_id = ?', [id]);
+  run(`DELETE FROM ${table} WHERE id = ?`, [id]);
+  return true;
+}
+
+const removeImage = (id) => run('DELETE FROM catalog_images WHERE id = ?', [id]);
+const getImage = (id) => get('SELECT * FROM catalog_images WHERE id = ?', [id]);
+
 module.exports = {
+  createItem, updateItem, deleteItem, removeImage, getImage,
+  listVenues, getVenue, migrate,
   init, listTemplates, listLocations, listHotels, listRooms, listMcs, listActivities, listLogistics,
   getHotel, getRoom, getMc, getActivity, getLogistics, getTemplate, getLocation,
   imagesFor, addImage, clearImages, saveDeck, listDecks, count,

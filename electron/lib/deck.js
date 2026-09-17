@@ -1,7 +1,8 @@
 'use strict';
 const fs = require('fs');
 const PptxGenJS = require('pptxgenjs');
-const { money } = require('./pricing');
+const { money, clientFacing } = require('./pricing');
+const L = require('./layout');
 
 /*
  * The deck builder.
@@ -12,9 +13,9 @@ const { money } = require('./pricing');
  * produces the same deck.
  */
 
-const W = 13.333;          // 16:9 at 13.333 x 7.5 inches
-const H = 7.5;
-const M = 0.62;            // outer margin
+const W = L.SLIDE.w;       // 16:9 at 13.333 x 7.5 inches
+const H = L.SLIDE.h;
+const M = L.MARGIN;        // outer margin
 
 const INK = '12191C';
 const SOFT = '4A565B';
@@ -228,26 +229,62 @@ const SLIDES = {
   activities(pptx, ctx, d) {
     const list = d.activities || [];
     if (!list.length) return;
-    // Three cards to a slide keeps each photograph large enough to be worth
-    // showing; more than that and the deck becomes a contact sheet.
-    for (let i = 0; i < list.length; i += 3) {
-      const page = list.slice(i, i + 3);
+
+    /* The slide shape follows the count: one activity gets the whole slide,
+       three get three columns, seven get a slide of six and a hero. The rules
+       live in layout.js so every grid in the deck is built the same way. */
+    const pages = L.paginate(list);
+    pages.forEach((page, pageIndex) => {
       const s = pptx.addSlide();
-      chrome(s, ctx, i === 0 ? 'The programme' : 'The programme, continued', 'Activities');
+      chrome(s, ctx, pageIndex === 0 ? 'The programme' : 'The programme, continued', 'Activities');
+
+      if (page.length === 1) {
+        const a = page[0];
+        const box = L.hero('scene');
+        plate(s, { ...box.image, path: firstImage(a), label: a.name, accent: ctx.accent });
+        s.addText(activityMeta(a), { ...box.kicker, fontSize: 10, bold: true, color: ctx.accent, fontFace: SANS, charSpacing: 2 });
+        s.addText(a.name, { ...box.title, fontSize: 24, bold: true, color: INK, fontFace: SANS });
+        s.addText(a.summary || '', { ...box.body, fontSize: 14, color: SOFT, fontFace: SANS, lineSpacingMultiple: 1.35 });
+        s.addText(activityPrice(a), { ...box.footer, fontSize: 15, bold: true, color: ctx.accent, fontFace: SANS });
+        return;
+      }
+
+      const { cells } = L.cells(page.length);
       page.forEach((a, j) => {
-        const x = M + j * 4.12;
-        plate(s, { x, y: 1.85, w: 3.85, h: 2.2, path: firstImage(a), label: a.name, accent: ctx.accent });
-        s.addText(a.name, { x, y: 4.15, w: 3.85, h: 0.6, fontSize: 15, bold: true, color: INK, fontFace: SANS });
-        s.addText(a.summary || '', { x, y: 4.8, w: 3.85, h: 1.5, fontSize: 11, color: SOFT, fontFace: SANS, lineSpacingMultiple: 1.25 });
-        const detail = [
-          a.duration_mins ? `${Math.round(a.duration_mins / 60 * 10) / 10} hours` : null,
-          a.pax_max ? `up to ${a.pax_max} pax` : null,
-          a.indoor ? 'indoor' : 'outdoor',
-        ].filter(Boolean).join('  ·  ');
-        s.addText(detail, { x, y: 6.3, w: 3.85, h: 0.28, fontSize: 9, color: FAINT, fontFace: SANS });
-        s.addText(a.rate_type === 'per_head' ? `${money(a.rate)} per person` : `${money(a.rate)} for the group`, {
-          x, y: 6.6, w: 3.85, h: 0.3, fontSize: 11, bold: true, color: ctx.accent, fontFace: SANS,
+        const c = L.card(cells[j], 'scene');
+        plate(s, { ...c.image, path: firstImage(a), label: a.name, accent: ctx.accent });
+        s.addText(a.name, { ...c.title, fontSize: page.length > 3 ? 13 : 15, bold: true, color: INK, fontFace: SANS });
+        s.addText(a.summary || '', {
+          ...c.body, fontSize: page.length > 3 ? 10 : 11, color: SOFT, fontFace: SANS,
+          lineSpacingMultiple: 1.2, shrinkText: true,
         });
+        s.addText(activityPrice(a), { ...c.footer, fontSize: 11, bold: true, color: ctx.accent, fontFace: SANS });
+      });
+    });
+  },
+
+  venue(pptx, ctx, d) {
+    if (!d.venue) return;
+    const s = pptx.addSlide();
+    chrome(s, ctx, d.venue.name, 'The space');
+    const box = L.split(0.56);
+    plate(s, { ...box.left, path: firstImage(d.venue), label: d.venue.name, accent: ctx.accent });
+    s.addText(String(d.venue.kind || '').toUpperCase(), {
+      x: box.right.x, y: box.right.y, w: box.right.w, h: 0.3,
+      fontSize: 10, bold: true, color: ctx.accent, fontFace: SANS, charSpacing: 2,
+    });
+    s.addText(d.venue.description || '', {
+      x: box.right.x, y: box.right.y + 0.4, w: box.right.w, h: 1.8,
+      fontSize: 13, color: SOFT, fontFace: SANS, lineSpacingMultiple: 1.35,
+    });
+    if (d.venue.capacity) {
+      s.addText(`${d.venue.capacity} guests`, {
+        x: box.right.x, y: box.right.y + 2.3, w: box.right.w, h: 0.5,
+        fontSize: 22, bold: true, color: INK, fontFace: SANS,
+      });
+      s.addText('maximum capacity', {
+        x: box.right.x, y: box.right.y + 2.78, w: box.right.w, h: 0.3,
+        fontSize: 10, color: FAINT, fontFace: SANS,
       });
     }
   },
@@ -278,7 +315,9 @@ const SLIDES = {
   },
 
   investment(pptx, ctx, d) {
-    const q = d.quote;
+    /* Stripped of cost before anything is drawn. A buy price on a slide the
+       client reads would be worse than a wrong number. */
+    const q = clientFacing(d.quote);
     const s = pptx.addSlide();
     chrome(s, ctx, 'Investment', 'Costs');
 
@@ -359,6 +398,15 @@ const SLIDES = {
   },
 };
 
+const activityMeta = (a) => [
+  a.duration_mins ? `${Math.round(a.duration_mins / 60 * 10) / 10} HOURS` : null,
+  a.pax_max ? `UP TO ${a.pax_max} PAX` : null,
+  a.indoor ? 'INDOOR' : 'OUTDOOR',
+].filter(Boolean).join('   ·   ');
+
+const activityPrice = (a) => (a.rate_type === 'per_head'
+  ? `${money(a.rate)} per person` : `${money(a.rate)} for the group`);
+
 const headCell = () => ({
   bold: true, fontSize: 9, color: FAINT, fontFace: SANS, charSpacing: 2,
   fill: PAPER, margin: [6, 6, 6, 6], valign: 'bottom',
@@ -409,7 +457,7 @@ async function build(d, brand, destination) {
   };
 
   const plan = d.slidePlan && d.slidePlan.length ? d.slidePlan
-    : ['cover', 'credentials', 'destination', 'hotel', 'mc', 'activities', 'logistics', 'investment', 'terms', 'closing'];
+    : ['cover', 'credentials', 'destination', 'venue', 'hotel', 'mc', 'activities', 'logistics', 'investment', 'terms', 'closing'];
 
   for (const kind of plan) {
     const fn = SLIDES[kind];

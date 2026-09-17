@@ -35,13 +35,20 @@ function calculate(sel, rates = {}) {
   const days = Math.max(1, Math.floor(Number(sel.days) || 1));
 
   const lines = [];
-  const push = (group, description, detail, qty, unit, unitCents) => {
+  /* Two prices travel together: what the item costs us and what the client is
+     shown. Only the client price is ever rendered into a deck — the cost and
+     the margin exist so the person quoting can see the shape of the job before
+     they send it. */
+  const push = (group, description, detail, qty, unit, unitCents, costCents = 0) => {
     if (!qty || !unitCents) return;
     lines.push({
       group, description, detail, qty, unit,
       unitPrice: fromCents(unitCents),
       amount: fromCents(unitCents * qty),
       amountCents: unitCents * qty,
+      unitCost: fromCents(costCents),
+      costAmount: fromCents(costCents * qty),
+      costCents: costCents * qty,
     });
   };
 
@@ -54,28 +61,36 @@ function calculate(sel, rates = {}) {
       : Math.ceil(pax / occupancy);
     push('Accommodation', `${sel.hotel.name} — ${sel.room.tier}`,
       `${rooms} room${rooms === 1 ? '' : 's'} at ${occupancy} per room, ${nights} night${nights === 1 ? '' : 's'}`,
-      rooms * nights, 'room-night', toCents(sel.room.nightly_rate));
+      rooms * nights, 'room-night', toCents(sel.room.nightly_rate), toCents(sel.room.cost_price));
   }
 
   if (sel.mc) {
-    push('Host', sel.mc.name, sel.mc.headline, days, 'day', toCents(sel.mc.day_rate));
+    push('Host', sel.mc.name, sel.mc.headline, days, 'day', toCents(sel.mc.day_rate), toCents(sel.mc.cost_price));
   }
 
   for (const a of sel.activities || []) {
     const perHead = a.rate_type === 'per_head';
     push('Activities', a.name,
       perHead ? `${pax} pax at ${money(a.rate)} per person` : 'Flat rate for the group',
-      perHead ? pax : 1, perHead ? 'pax' : 'package', toCents(a.rate));
+      perHead ? pax : 1, perHead ? 'pax' : 'package', toCents(a.rate), toCents(a.cost_price));
   }
 
   for (const l of sel.logistics || []) {
     const qty = l.rate_type === 'per_day' ? days : l.rate_type === 'per_head' ? pax : 1;
     const unit = l.rate_type === 'per_day' ? 'day' : l.rate_type === 'per_head' ? 'pax' : 'package';
-    push('Production', l.name, l.spec, qty, unit, toCents(l.rate));
+    push('Production', l.name, l.spec, qty, unit, toCents(l.rate), toCents(l.cost_price));
+  }
+
+  if (sel.venue) {
+    const qty = sel.venue.rate_type === 'per_day' ? days : 1;
+    push('Venue', sel.venue.name, sel.venue.description, qty,
+      sel.venue.rate_type === 'per_day' ? 'day' : 'package',
+      toCents(sel.venue.client_price), toCents(sel.venue.cost_price));
   }
 
   for (const c of sel.custom || []) {
-    push('Additional', c.description, c.detail || '', Number(c.qty) || 1, c.unit || 'item', toCents(c.unitPrice));
+    push('Additional', c.description, c.detail || '', Number(c.qty) || 1, c.unit || 'item',
+      toCents(c.unitPrice), toCents(c.unitCost));
   }
 
   const subtotalCents = lines.reduce((a, l) => a + l.amountCents, 0);
@@ -92,11 +107,25 @@ function calculate(sel, rates = {}) {
   const groups = [];
   for (const l of lines) {
     let g = groups.find((x) => x.name === l.group);
-    if (!g) { g = { name: l.group, lines: [], subtotal: 0, subtotalCents: 0 }; groups.push(g); }
+    if (!g) { g = { name: l.group, lines: [], subtotal: 0, subtotalCents: 0, costCents: 0, cost: 0 }; groups.push(g); }
     g.lines.push(l);
     g.subtotalCents += l.amountCents;
     g.subtotal = fromCents(g.subtotalCents);
+    g.costCents += l.costCents;
+    g.cost = fromCents(g.costCents);
   }
+
+  /* The internal view. Kept in its own object so that handing the client-facing
+     quote to the deck builder cannot carry cost with it by accident. */
+  const totalCostCents = lines.reduce((a, l) => a + l.costCents, 0);
+  const grossMarginCents = subtotalCents - totalCostCents;
+  const internal = {
+    totalCost: fromCents(totalCostCents),
+    grossMargin: fromCents(grossMarginCents),
+    grossMarginPct: subtotalCents > 0 ? Math.round((grossMarginCents / subtotalCents) * 1000) / 10 : 0,
+    costedLines: lines.filter((l) => l.costCents > 0).length,
+    uncostedLines: lines.filter((l) => !l.costCents).length,
+  };
 
   return {
     pax, nights, days,
@@ -109,6 +138,7 @@ function calculate(sel, rates = {}) {
     tax: fromCents(taxCents),
     taxPct: cfg.taxPct,
     total: fromCents(totalCents),
+    internal,
     perPax: pax > 0 ? fromCents(Math.round(totalCents / pax)) : 0,
     rounding: cfg.rounding,
   };
@@ -139,4 +169,23 @@ function validate(sel) {
   return warnings;
 }
 
-module.exports = { calculate, validate, money, toCents, fromCents, DEFAULTS };
+/* The deck renders from this and nothing else. Stripping cost here rather than
+   trusting every call site means a new slide cannot leak a buy price onto a
+   page the client reads. */
+function clientFacing(quote) {
+  const strip = (l) => {
+    const { unitCost, costAmount, costCents, ...rest } = l;
+    return rest;
+  };
+  const { internal, ...rest } = quote;
+  return {
+    ...rest,
+    lines: quote.lines.map(strip),
+    groups: quote.groups.map((g) => {
+      const { cost, costCents, ...gr } = g;
+      return { ...gr, lines: g.lines.map(strip) };
+    }),
+  };
+}
+
+module.exports = { calculate, validate, clientFacing, money, toCents, fromCents, DEFAULTS };
