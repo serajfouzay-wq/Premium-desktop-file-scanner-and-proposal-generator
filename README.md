@@ -104,6 +104,61 @@ applies before service charge and tax. The renderer does not do its own sums —
 it asks the same engine that writes the deck, and the build fails if the two
 ever fall out of step.
 
+### The catalog (version 3)
+
+Everything a proposal can contain lives in the **Inventory** dashboard: hotels
+and their room tiers, venues, hosts, activities and production items. Each can
+be added, edited and removed without touching a file.
+
+**Two prices per item.** What it costs you, and what the client is shown. The
+difference is your margin — reported in the dashboard and beside the running
+total — and it never reaches a slide. `pricing.clientFacing()` strips cost
+before the deck builder sees the quote, so a new slide cannot leak a buy price
+onto a page the client reads, and a test asserts no cost figure appears
+anywhere in the generated file.
+
+Upgrading an existing install sets cost equal to the current price, so margin
+reads zero until real figures are entered. A markup nobody typed is a number
+nobody checked.
+
+**Photographs are copied in,** not referenced where they sit — a catalog
+pointing at someone's Desktop empties itself the first time they tidy up.
+Removing an item drops its image records but leaves the files, since they may
+be the only copy.
+
+### How the slides lay themselves out
+
+Slide geometry is computed from the slide's own dimensions and the number of
+items being placed, so a deck of three activities and a deck of six read as the
+same document. The rules live in [`electron/lib/layout.js`](electron/lib/layout.js),
+documented at the head of the file.
+
+| Items | Shape |
+|---|---|
+| 1 | Hero — one picture across 55% of the width, text beside it |
+| 2 | Two columns |
+| 3 | Three columns |
+| 4 | Two by two |
+| 5–6 | Three by two |
+| 7+ | Slides of six, with the last laid out for its own count |
+
+Cells divide the content width with gutters *between* them only:
+
+```
+colW = (contentW - GUTTER * (cols - 1)) / cols
+x(i) = MARGIN + col * (colW + GUTTER)
+```
+
+Pictures never stretch. Each placeholder takes a fixed aspect chosen by subject
+— 16:9 for scenes, 3:2 for venues, 3:4 for headshots — and the image is drawn
+with `sizing: { type: 'cover' }`, which scales it to fill and crops the
+overflow centred. That is why the aspect is per subject: a portrait headshot in
+a 16:9 box would be cropped through the face.
+
+69 tests hold the geometry: no cell crosses a margin, no two overlap, each row
+fills the content width exactly, captions clear their pictures, and a trailing
+item lays out for its own count rather than being stranded.
+
 ### Feature C — write a proposal from past work (versions 1 and 2)
 
 1. Describe what you need in plain words: *"a fixed-price proposal for Meridian
@@ -153,8 +208,10 @@ npm install
 npm run dev        # Vite + Electron, hot reload
 npm start          # production build, then launch
 npm test              # everything below, in order
+npm run test:layout   # 69 checks on slide geometry
 npm run test:e2e      # 39 checks across the scanning pipeline
-npm run test:deck     # 18 checks that read the generated .pptx back
+npm run test:deck     # 26 checks that read the generated .pptx back
+npm run test:catalog  # 24 checks on catalog editing and migration
 npm run test:pricing  # 17 checks on the money arithmetic
 npm run test:classify # 12 checks over real document shapes
 npm run dist:win   # package a Windows installer
@@ -223,13 +280,14 @@ electron/
     catalog.js            vendor catalog schema, seed data and queries
     catalog-images.js     first-run placeholder photography
     pricing.js            deterministic quotation arithmetic
+    layout.js             procedural slide geometry
     deck.js               PowerPoint slide masters and builder
     ocr.js                optional recognition engine, behind an adapter
     document-template.js  the designed document — preview, PDF and Word
     exporters.js          PDF / Word / HTML output
 src/
   App.jsx                 shell and navigation
-  views/                  Dashboard · Scanner · Library · Builder · Studio · Settings
+  views/                  Dashboard · Scanner · Library · Builder · Inventory · Studio · Settings
   components/SlidePreview.jsx  the deck, mirrored on screen before export
   components/ui.jsx       buttons, cards, toasts, icons
   lib/demo.js             sample data for the browser preview only
