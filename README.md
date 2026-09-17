@@ -13,9 +13,15 @@ process and never leave it.
 
 **[⬇ Download the latest Windows installer](../../releases/latest)**
 
-Two versions can be installed at once. **Cabinet 2** keeps its own settings,
-its own index and its own library folder, so it can be run beside version 1
-and the two sets of results compared. The sidebar shows which one is open.
+All three versions can be installed at once. Each keeps its own settings, its
+own index and its own library folder, so they can be run side by side and their
+results compared. The sidebar badge shows which one is open.
+
+| Version | Proposal engine | Output |
+|---|---|---|
+| 1 | Retrieval from your filed documents | HTML / PDF / Word |
+| 2 | The same, with a corrected scanner | HTML / PDF / Word |
+| **3** | **Deterministic, from a vendor catalog** | **PowerPoint (.pptx)** |
 
 Run it. Windows will show a blue *"Windows protected your PC"* screen because
 the installer is not code-signed — click **More info**, then **Run anyway**.
@@ -75,7 +81,30 @@ desktop-only. See [Deploying the preview](#deploying-the-preview) below.
    Files are **copied by default**, so originals stay where they are, and a
    name collision never overwrites — it gets a numeric suffix.
 
-### Feature B — write a proposal
+### Feature B — build a proposal deck (version 3)
+
+No model, no API key, no network. The deck is assembled from priced catalog
+records, so the same selections always produce the same deck and the same
+total — a quotation rather than a draft.
+
+1. **Template** — team building, gala dinner or conference.
+2. **Destination** — Kuala Lumpur, Penang, Langkawi, Genting or Melaka.
+3. **Details** — head count, dates, then hotel, room tier, host, activities and
+   production picked from the catalog.
+4. **Review** — the total is repriced by the engine on every change and the
+   deck is previewed slide by slide before anything is written.
+5. **Export** — a `.pptx` with cover, credentials, destination, accommodation,
+   host, activities, logistics, investment, terms and closing slides, with the
+   catalog's photographs placed into each.
+
+**Where the money comes from.** Every line is a catalog rate multiplied by a
+quantity you chose. Amounts are carried in cents, so the lines on the page add
+up to the total exactly; rooms follow occupancy rather than head count; margin
+applies before service charge and tax. The renderer does not do its own sums —
+it asks the same engine that writes the deck, and the build fails if the two
+ever fall out of step.
+
+### Feature C — write a proposal from past work (versions 1 and 2)
 
 1. Describe what you need in plain words: *"a fixed-price proposal for Meridian
    Logistics covering a 12 week warehouse automation rollout"*.
@@ -123,7 +152,10 @@ Otherwise:
 npm install
 npm run dev        # Vite + Electron, hot reload
 npm start          # production build, then launch
-npm run test:e2e      # 39 checks across the whole pipeline
+npm test              # everything below, in order
+npm run test:e2e      # 39 checks across the scanning pipeline
+npm run test:deck     # 18 checks that read the generated .pptx back
+npm run test:pricing  # 17 checks on the money arithmetic
 npm run test:classify # 12 checks over real document shapes
 npm run dist:win   # package a Windows installer
 ```
@@ -187,12 +219,18 @@ electron/
     organize.js           physical filing, safe names, no overwrites
     chunk.js              passage splitting with section labels
     retrieve.js           intent parsing, entity resolution, retrieval
-    generate.js           drafting and the numeric firewall
+    generate.js           drafting and the numeric firewall (v1/v2)
+    catalog.js            vendor catalog schema, seed data and queries
+    catalog-images.js     first-run placeholder photography
+    pricing.js            deterministic quotation arithmetic
+    deck.js               PowerPoint slide masters and builder
+    ocr.js                optional recognition engine, behind an adapter
     document-template.js  the designed document — preview, PDF and Word
     exporters.js          PDF / Word / HTML output
 src/
   App.jsx                 shell and navigation
-  views/                  Dashboard · Scanner · Library · Studio · Settings
+  views/                  Dashboard · Scanner · Library · Builder · Studio · Settings
+  components/SlidePreview.jsx  the deck, mirrored on screen before export
   components/ui.jsx       buttons, cards, toasts, icons
   lib/demo.js             sample data for the browser preview only
 test/
@@ -213,11 +251,15 @@ The library is plain folders and files. Nothing is locked inside the app.
 
 ## Known limits
 
-**Scanned documents.** A PDF that is a photograph of paper has no selectable
-text, so it goes to the review queue rather than being read. Optical character
-recognition would fix this and is the obvious next step, but it needs an image
-renderer and a language model file downloaded on first run, which is a decision
-about size and offline behaviour rather than a small addition.
+**The deck has not been opened in PowerPoint from this project's test machine.**
+Its XML is well-formed, its parts are complete, and the test suite reads the
+generated file back and checks that every monetary figure in it traces to the
+catalog or the quote — but no renderer has displayed it here. Worth a look at
+the first one you export.
+
+**Deep OCR needs a connection the first time.** The recognition engine fetches
+a language model on first use and then works offline. Where it cannot, the
+waits are bounded and the failure is reported; fast mode is unaffected.
 
 **Proposal styling.** The document structure is deliberate; the visual style is
 a reasonable default rather than a match for any particular house style. Supply
