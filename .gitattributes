@@ -1,0 +1,5 @@
+# Generated sources are compared against freshly generated output, so their
+# line endings must survive a checkout unchanged on every platform.
+* text=auto eol=lf
+*.png binary
+*.pptx binary

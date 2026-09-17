@@ -33,9 +33,14 @@ function generate() {
 
 const generated = generate();
 
+/* Git checks this file out with CRLF on Windows, so a byte comparison reports
+   drift on a file that is identical in content. The check is about the rules
+   having changed, not about which platform wrote the newlines. */
+const normalise = (text) => String(text).replace(/\r\n/g, '\n').trimEnd();
+
 if (process.argv.includes('--check')) {
   const current = fs.existsSync(TARGET) ? fs.readFileSync(TARGET, 'utf8') : '';
-  if (current !== generated) {
+  if (normalise(current) !== normalise(generated)) {
     console.error([
       '',
       '  src/lib/pricing-shared.js is out of date with electron/lib/pricing.js.',
