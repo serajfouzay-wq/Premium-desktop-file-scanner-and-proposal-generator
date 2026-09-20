@@ -293,8 +293,8 @@ function seed() {
   insert('logistics', 'INSERT INTO logistics (id,name,category,spec,rate_type,rate,cost_price) VALUES (?,?,?,?,?,?,?)',
     LOGISTICS.map((l) => [...l, round2(l[5] * 0.70)]));
   insert('venues', 'INSERT INTO venues (id,location_id,name,kind,description,capacity,cost_price,client_price,rate_type) VALUES (?,?,?,?,?,?,?,?,?)', VENUES);
-  return filled;
   insert('proposal_templates', 'INSERT INTO proposal_templates (id,name,blurb,accent,slide_plan,sort) VALUES (?,?,?,?,?,?)', TEMPLATES);
+  return filled;
 }
 
 /* ----------------------------------------------------------------- reads */

@@ -27,6 +27,18 @@ app.whenReady().then(async () => {
     const info = catalog.init();
     check('venues are seeded', info.venues > 0, `${info.venues} venues`);
 
+    /* Every table the builder depends on must arrive populated on a fresh
+       install. Templates were once left unseeded by an unreachable line, which
+       emptied step one of the wizard while every other screen looked fine. */
+    for (const [label, n] of [['templates', info.templates], ['hotels', info.hotels],
+      ['activities', info.activities], ['venues', info.venues]]) {
+      check(`a fresh install has ${label}`, n > 0, String(n));
+    }
+    check('every seeded template carries a usable slide plan',
+      catalog.listTemplates().every((t) => {
+        try { return JSON.parse(t.slide_plan).length > 0; } catch { return false; }
+      }), `${catalog.listTemplates().length} templates`);
+
     // Running init twice must not fail — the migration has to be idempotent.
     let second = null;
     try { second = catalog.init(); } catch (err) { second = { error: err.message }; }
