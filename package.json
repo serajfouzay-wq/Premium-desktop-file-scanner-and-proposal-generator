@@ -28,7 +28,8 @@
     "test": "npm run test:layout && npm run test:pricing && npm run test:classify && npm run test:catalog && npm run test:scenario && npm run test:e2e && npm run test:deck",
     "test:layout": "node test/layout.test.js",
     "test:catalog": "xvfb-run -a electron test/catalog.test.js",
-    "test:scenario": "xvfb-run -a electron test/scenario.test.js"
+    "test:scenario": "xvfb-run -a electron test/scenario.test.js",
+    "inspect:pptx": "node scripts/inspect-pptx.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
