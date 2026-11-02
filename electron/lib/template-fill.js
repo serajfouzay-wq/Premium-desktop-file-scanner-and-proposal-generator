@@ -94,7 +94,10 @@ async function inspect(templatePath) {
  * @param {string} templatePath  the client's .pptx, never modified
  * @param {string} destination   where the filled copy is written
  * @param {Array}  mapping       text slots:    [{ slide, slot, field, expect }]
+ *                                table cells:   [{ slide, table, row, col, field, expect }]
  *                                picture slots: [{ slide, pic, field }]
+ *                                literal runs:  [{ slide, find, replace, count }]
+ *                                after a label: [{ slide, after, field, expect }]
  * @param {object} values        { field: 'text to write' | '/path/to/photo.jpg' }
  * @param {object} opts          { strict = true }
  */
@@ -102,103 +105,231 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
   const strict = opts.strict !== false;
   const zip = await JSZip.loadAsync(await fs.readFile(templatePath));
 
-  /* A mapping entry addresses either a text run (slot) or a picture frame
-     (pic). They are applied in separate passes over the same slide XML. */
+  /* A mapping entry addresses one of three things:
+       { slide, slot }              a highlighted text placeholder
+       { slide, table, row, col }   a table cell, for the pricing pages
+       { slide, pic }               a picture frame
+     Table cells contain placeholder runs too, so the two kinds of text target
+     overlap. Every position is therefore measured on the ORIGINAL slide XML
+     and all the edits are applied together, last one first. Editing in two
+     passes would shift the offsets of the second. */
   const bySlide = new Map();
-  const picsBySlide = new Map();
   for (const m of mapping) {
-    const bucket = m.pic != null ? picsBySlide : bySlide;
-    if (!bucket.has(m.slide)) bucket.set(m.slide, []);
-    bucket.get(m.slide).push(m);
+    if (!bySlide.has(m.slide)) bySlide.set(m.slide, []);
+    bySlide.get(m.slide).push(m);
   }
-  for (const slide of picsBySlide.keys()) if (!bySlide.has(slide)) bySlide.set(slide, []);
 
   const written = [];
+  const photos = [];
   const skipped = [];
   const problems = [];
-  const photos = [];
 
   for (const [slide, entries] of bySlide) {
     const name = `ppt/slides/slide${slide}.xml`;
     const file = zip.file(name);
     if (!file) { problems.push(`slide ${slide} is not in this template`); continue; }
 
-    let xml = await file.async('string');
-    const runs = runsOf(xml);
+    const original = await file.async('string');
+    const runs = runsOf(original);
     const slots = runs.filter(isPlaceholder);
+    const tables = tablesOf(original);
+    const frames = picturesOf(original);
+    const edits = [];
 
-    /* Apply from the end backwards: every replacement changes the length of
-       the XML, and editing forwards would invalidate every later offset. */
-    const ordered = entries
-      .map((e) => ({ entry: e, run: slots[e.slot] }))
-      .sort((a, b) => (b.run ? b.run.start : -1) - (a.run ? a.run.start : -1));
+    for (const entry of entries) {
+      const value = values[entry.field];
 
-    for (const { entry, run } of ordered) {
-      if (!run) { problems.push(`slide ${slide} has no placeholder ${entry.slot} (${entry.field})`); continue; }
-      if (entry.expect != null && run.text.trim() !== String(entry.expect).trim()) {
-        problems.push(`slide ${slide} slot ${entry.slot} (${entry.field}) reads `
-          + `"${run.text.trim()}" but the mapping expects "${entry.expect}" — the template has changed`);
+      /* ── a table cell ── */
+      if (entry.table != null) {
+        const table = tables[entry.table];
+        const cell = table && table.rows[entry.row] && table.rows[entry.row][entry.col];
+        if (!cell) {
+          problems.push(`slide ${slide} has no cell [${entry.row}][${entry.col}] in table `
+            + `${entry.table} (${entry.field})`
+            + (table ? ` — it is ${table.rows.length} rows` : ' — there is no such table'));
+          continue;
+        }
+        if (entry.expect != null && cell.text.trim() !== String(entry.expect).trim()) {
+          problems.push(`slide ${slide} cell [${entry.row}][${entry.col}] (${entry.field}) reads `
+            + `"${cell.text.trim()}" but the mapping expects "${entry.expect}" — the table has changed`);
+          continue;
+        }
+        if (value == null || value === '') { skipped.push(entry.field); continue; }
+        if (!cell.runs.length) {
+          problems.push(`slide ${slide} cell [${entry.row}][${entry.col}] (${entry.field}) has no `
+            + 'text to replace — an empty cell carries no formatting to keep');
+          continue;
+        }
+        /* Keep the first run's formatting, drop the rest of the cell's text. */
+        edits.push({ start: cell.runs[0].start, end: cell.runs[0].end, text: escapeXml(value) });
+        for (let i = 1; i < cell.runs.length; i += 1) {
+          edits.push({ start: cell.runs[i].start, end: cell.runs[i].end, text: '' });
+        }
+        written.push({
+          slide, table: entry.table, row: entry.row, col: entry.col,
+          field: entry.field, value: String(value),
+        });
         continue;
       }
-      const value = values[entry.field];
-      if (value == null || value === '') { skipped.push(entry.field); continue; }
-      xml = xml.slice(0, run.start) + escapeXml(value) + xml.slice(run.end);
-      written.push({ slide, slot: entry.slot, field: entry.field, value: String(value) });
-    }
 
-    /* Pictures. Also back to front, for the same reason: re-pointing a frame
-       rewrites that stretch of XML and shifts everything after it. */
-    const picEntries = (picsBySlide.get(slide) || []).slice();
-    if (picEntries.length) {
-      const frames = picturesOf(xml);
-      const ordered2 = picEntries
-        .map((e) => ({ entry: e, frame: frames[e.pic] }))
-        .sort((a, b) => (b.frame ? b.frame.start : -1) - (a.frame ? a.frame.start : -1));
-
-      for (const { entry, frame } of ordered2) {
+      /* ── a picture frame ── */
+      if (entry.pic != null) {
+        const frame = frames[entry.pic];
         if (!frame) {
           problems.push(`slide ${slide} has no picture frame ${entry.pic} (${entry.field})`
             + ` — it holds ${frames.length}`);
           continue;
         }
-        const src = values[entry.field];
-        if (src == null || src === '') { skipped.push(entry.field); continue; }
-
+        if (value == null || value === '') { skipped.push(entry.field); continue; }
         let buffer;
         try {
-          buffer = await fs.readFile(src);
-        } catch (e) {
-          problems.push(`cannot read the photo for ${entry.field}: ${src}`);
+          buffer = await fs.readFile(value);
+        } catch {
+          problems.push(`cannot read the photo for ${entry.field}: ${value}`);
           continue;
         }
-        const ext = String(src).split('.').pop().toLowerCase().replace('jpg', 'jpeg');
-        if (!MIME[ext] && !MIME[`${ext}`]) {
+        const ext = String(value).split('.').pop().toLowerCase().replace(/^jpg$/, 'jpeg');
+        if (!MIME[ext]) {
           problems.push(`${entry.field}: ${ext} is not an image format PowerPoint accepts`);
           continue;
         }
         const size = imageSize(buffer);
         if (!size) {
-          problems.push(`${entry.field}: ${src} is not a readable PNG, JPEG or GIF`);
+          problems.push(`${entry.field}: ${value} is not a readable PNG, JPEG or GIF`);
           continue;
         }
         const crop = coverCrop(frame.ratio, size.width / size.height);
         const rId = await addImageRel(zip, slide, buffer, ext);
-        xml = repointPicture(xml, frame, rId, crop);
+        const body = repointPictureBody(original.slice(frame.start, frame.end), rId, crop);
+        edits.push({ start: frame.start, end: frame.end, text: body, isPicture: true });
         photos.push({
           slide,
           pic: entry.pic,
           field: entry.field,
-          source: String(src),
+          source: String(value),
           frame: { x: frame.xIn, y: frame.yIn, w: frame.widthIn, h: frame.heightIn, ratio: frame.ratio },
           image: size,
           crop,
           inGroup: frame.inGroup,
         });
+        continue;
+      }
+
+      /* ── the run after a label ──
+         This template is largely "LABEL: value" pairs, and several of those
+         values are not highlighted, so they have no slot number. Addressing
+         the run that follows the label reads the slide the way a person does,
+         and tells the two identical "xxxxxx" runs under Email and Mobile
+         apart, which a text search cannot. */
+      if (entry.after != null) {
+        const i = runs.findIndex((r) => r.text.includes(entry.after));
+        const next = i >= 0 ? runs.slice(i + 1).find((r) => r.text.trim() !== '') : null;
+        if (!next) {
+          problems.push(`slide ${slide}: nothing follows "${entry.after}" (${entry.field})`);
+          continue;
+        }
+        if (entry.expect != null && next.text.trim() !== String(entry.expect).trim()) {
+          problems.push(`slide ${slide}: the run after "${entry.after}" reads `
+            + `"${next.text.trim()}" but the mapping expects "${entry.expect}" `
+            + '— the template has changed');
+          continue;
+        }
+        if (value == null || value === '') { skipped.push(entry.field); continue; }
+        edits.push({ start: next.start, end: next.end, text: escapeXml(value) });
+        written.push({ slide, after: entry.after, field: entry.field, value: String(value) });
+        continue;
+      }
+
+      /* ── a run addressed by its own text ──
+         The template carries notes to whoever fills it in: slide 12 reads
+         "Xxxx – link from page 1". Filling the placeholder alone would leave
+         the client reading "ABC Sdn Bhd – link from page 1", so these have to
+         go. They are not highlighted, so they cannot be addressed by slot
+         number; they are addressed by their text, and the expected number of
+         occurrences is stated so a template change is noticed. */
+      if (entry.find != null) {
+        const hits = runs.filter((r) => r.text.includes(entry.find));
+        if (entry.count != null && hits.length !== entry.count) {
+          problems.push(`slide ${slide}: expected ${entry.count} run(s) containing `
+            + `"${entry.find}" but found ${hits.length} — the template has changed`);
+          continue;
+        }
+        if (!hits.length) {
+          problems.push(`slide ${slide}: no run contains "${entry.find}"`);
+          continue;
+        }
+        const replacement = entry.replace != null ? entry.replace
+          : (value != null ? String(value) : '');
+        for (const r of hits) {
+          edits.push({
+            start: r.start,
+            end: r.end,
+            text: escapeXml(r.text.split(entry.find).join(replacement)),
+          });
+        }
+        written.push({
+          slide, find: entry.find, field: entry.field || null,
+          value: replacement, occurrences: hits.length,
+        });
+        continue;
+      }
+
+      /* ── a highlighted text placeholder ── */
+      const run = slots[entry.slot];
+      if (!run) {
+        problems.push(`slide ${slide} has no placeholder ${entry.slot} (${entry.field})`
+          + ` — it holds ${slots.length}`);
+        continue;
+      }
+      if (entry.expect != null && run.text.trim() !== String(entry.expect).trim()) {
+        problems.push(`slide ${slide} slot ${entry.slot} (${entry.field}) reads `
+          + `"${run.text.trim()}" but the mapping expects "${entry.expect}" — the template has changed`);
+        continue;
+      }
+      if (!entry.clear && (value == null || value === '')) { skipped.push(entry.field); continue; }
+      const text = entry.clear ? '' : escapeXml(value);
+      edits.push({ start: run.start, end: run.end, text });
+      written.push({ slide, slot: entry.slot, field: entry.field, value: entry.clear ? '' : String(value) });
+    }
+
+    /* Two mapping entries pointing at the same text would corrupt the file, so
+       that is caught rather than applied. */
+    const sorted = edits.slice().sort((a, b) => a.start - b.start);
+    for (let i = 1; i < sorted.length; i += 1) {
+      if (sorted[i].start < sorted[i - 1].end) {
+        problems.push(`slide ${slide}: two mapping entries write to the same place `
+          + '— one of them is addressing the wrong target');
       }
     }
 
+    let xml = original;
+    for (const e of sorted.reverse()) {
+      xml = xml.slice(0, e.start) + e.text + xml.slice(e.end);
+    }
     zip.file(name, xml);
   }
+
+  /* What is still a placeholder. A deck that reaches a client with "xxx" on
+     it is worse than one that was never produced, so every slide is read back
+     — not only the ones we touched — and anything that still looks like a
+     placeholder is named, with the words around it so it can be found. */
+  const remaining = [];
+  for (const n of Object.keys(zip.files).filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f))) {
+    const slide = slideNumber(n);
+    const xml = await zip.file(n).async('string');
+    const all = runsOf(xml);
+    all.forEach((r, i) => {
+      if (!/^[\s]*[xX]{2,}[\s.:·–-]*$/.test(r.text)) return;
+      const before = all.slice(Math.max(0, i - 2), i).map((x) => x.text).join(' ').trim();
+      remaining.push({
+        slide,
+        text: r.text.trim(),
+        highlighted: r.highlighted,
+        after: before.slice(-48) || null,
+      });
+    });
+  }
+  remaining.sort((a, b) => a.slide - b.slide);
 
   if (strict && problems.length) {
     const err = new Error(`The template does not match the mapping:\n  ${problems.join('\n  ')}`);
@@ -213,9 +344,8 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
   });
   await fs.writeFile(destination, out);
 
-  return { path: destination, bytes: out.length, written, photos, skipped, problems };
+  return { path: destination, bytes: out.length, written, photos, skipped, problems, remaining };
 }
-
 /** Read the text of every slide back, for checking what a fill produced. */
 async function readText(pptxPath) {
   const zip = await JSZip.loadAsync(await fs.readFile(pptxPath));
@@ -373,9 +503,8 @@ async function addImageRel(zip, slideNum, buffer, ext) {
   return rId;
 }
 
-/** Point one <p:pic> at a new relationship and set its cover crop. */
-function repointPicture(xml, pic, rId, crop) {
-  let body = xml.slice(pic.start, pic.end);
+/** The XML of one <p:pic>, pointed at a new relationship with a cover crop. */
+function repointPictureBody(body, rId, crop) {
   body = body.replace(/(<a:blip[^>]*\sr:embed=")[^"]+(")/, `$1${rId}$2`);
   const rect = `<a:srcRect l="${crop.l}" t="${crop.t}" r="${crop.r}" b="${crop.b}"/>`;
   if (/<a:srcRect\b[^>]*\/>/.test(body)) {
@@ -386,10 +515,110 @@ function repointPicture(xml, pic, rId, crop) {
     /* Goes immediately after the blip, which is where the schema wants it. */
     body = body.replace(/(<a:blip[^>]*(?:\/>|>[\s\S]*?<\/a:blip>))/, `$1${rect}`);
   }
-  return xml.slice(0, pic.start) + body + xml.slice(pic.end);
+  return body;
+}
+
+/** Point one <p:pic> at a new relationship and set its cover crop. */
+function repointPicture(xml, pic, rId, crop) {
+  return xml.slice(0, pic.start)
+    + repointPictureBody(xml.slice(pic.start, pic.end), rId, crop)
+    + xml.slice(pic.end);
+}
+
+
+/* ───────────────────────── tables ─────────────────────────
+   A price must never be written into the wrong column. On the investment
+   pages the placeholders are table cells, and in the XML they arrive as a flat
+   run of "Xxx", "xxx", "Xxx"... with nothing to say which is a unit, which a
+   unit price and which a total. Counting along that sequence would put a unit
+   price in the total column the first time the client edits a row.
+
+   So a cell is addressed by where it sits: { slide, table, row, col }. That
+   survives edits to the wording, and a row added or removed is reported rather
+   than silently shifting every figure after it. */
+
+/** Tables on a slide, as a grid of cells with their text and XML extent. */
+function tablesOf(xml) {
+  const tables = [];
+  const tblRe = /<a:tbl>[\s\S]*?<\/a:tbl>/g;
+  let t;
+  while ((t = tblRe.exec(xml))) {
+    const body = t[0];
+    const rows = [];
+    const rowRe = /<a:tr\b[^>]*>[\s\S]*?<\/a:tr>/g;
+    let r;
+    while ((r = rowRe.exec(body))) {
+      const cells = [];
+      const cellRe = /<a:tc\b[^>]*>[\s\S]*?<\/a:tc>/g;
+      let c;
+      while ((c = cellRe.exec(r[0]))) {
+        /* Offsets are kept absolute to the slide XML so a write can be placed
+           without re-deriving the position from the nesting. */
+        const absolute = t.index + r.index + c.index;
+        const texts = [...c[0].matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)];
+        cells.push({
+          row: rows.length,
+          col: cells.length,
+          text: texts.map((m) => unescapeXml(m[1])).join(''),
+          runs: texts.map((m) => ({
+            start: absolute + m.index + '<a:t>'.length,
+            end: absolute + m.index + '<a:t>'.length + m[1].length,
+            text: unescapeXml(m[1]),
+          })),
+          start: absolute,
+          end: absolute + c[0].length,
+        });
+      }
+      rows.push(cells);
+    }
+    tables.push({ index: tables.length, rows, start: t.index, end: t.index + body.length });
+  }
+  return tables;
+}
+
+/**
+ * Write text into one table cell, keeping the cell's own formatting by
+ * replacing the text of its first run and emptying any that follow.
+ */
+function writeCell(xml, cell, value) {
+  if (!cell.runs.length) return xml;
+  let out = xml;
+  /* Back to front, so earlier offsets stay valid. */
+  for (let i = cell.runs.length - 1; i >= 1; i -= 1) {
+    const run = cell.runs[i];
+    out = out.slice(0, run.start) + out.slice(run.end);
+  }
+  const first = cell.runs[0];
+  return out.slice(0, first.start) + escapeXml(value) + out.slice(first.end);
+}
+
+/** A readable dump of every table on every slide, for building a mapping. */
+async function inspectTables(templatePath) {
+  const zip = await JSZip.loadAsync(await fs.readFile(templatePath));
+  const names = Object.keys(zip.files)
+    .filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))
+    .sort((a, b) => slideNumber(a) - slideNumber(b));
+  const out = [];
+  for (const n of names) {
+    const xml = await zip.file(n).async('string');
+    const tables = tablesOf(xml);
+    if (!tables.length) continue;
+    out.push({
+      slide: slideNumber(n),
+      tables: tables.map((tb) => ({
+        index: tb.index,
+        rows: tb.rows.length,
+        cols: Math.max(0, ...tb.rows.map((r) => r.length)),
+        cells: tb.rows.map((r) => r.map((c) => c.text)),
+      })),
+    });
+  }
+  return out;
 }
 
 module.exports = {
   inspect, fill, readText, runsOf, isPlaceholder,
-  imageSize, coverCrop, picturesOf, addImageRel, repointPicture, ensureContentType,
+  imageSize, coverCrop, picturesOf, addImageRel, repointPicture, repointPictureBody,
+  ensureContentType,
+  tablesOf, writeCell, inspectTables,
 };

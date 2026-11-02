@@ -2,7 +2,7 @@
 /* Putting photos into a real deck's existing frames.
    The crop maths is checked always. The real-deck half additionally needs a
    .pptx to fill, which is the client's own file and is not in the repository:
-     TEMPLATE=<deck.pptx> node test/template-images.test.js
+     DECK=<deck.pptx> node test/template-images.test.js
    The photographs it inserts are drawn by the test itself. */
 const fs = require('fs');
 const path = require('path');
@@ -12,7 +12,9 @@ const tf = require('../electron/lib/template-fill');
 
 const { writePng, SHAPES } = require('./helpers/png');
 
-const TEMPLATE = process.env.TEMPLATE;
+/* DECK, not TEMPLATE: this test wants a finished deck with a photo grid,
+   while test/proposal.test.js wants the blank 12-page template. */
+const TEMPLATE = process.env.DECK;
 let pass = 0; let fail = 0;
 const check = (name, ok, detail = '') => {
   if (ok) { pass++; console.log(`  PASS  ${name}${detail ? `  — ${detail}` : ''}`); }
@@ -42,7 +44,7 @@ check('an unknown frame ratio crops nothing rather than guessing',
 
 if (!TEMPLATE || !fs.existsSync(TEMPLATE)) {
   console.log(`\n${'─'.repeat(62)}\n${pass} passed, ${fail} failed`);
-  console.log('(set TEMPLATE to a .pptx to also run the real-deck half)\n');
+  console.log('(set DECK to a .pptx with a photo grid to also run the real-deck half)\n');
   process.exit(fail ? 1 : 0);
 }
 

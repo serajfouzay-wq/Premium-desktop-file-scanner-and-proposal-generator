@@ -220,6 +220,14 @@ const CUR_NAME = {
 const PER_PAX = /\b(?:per|\/)\s*(?:pax|person|head|participant|pc)\b/i;
 const TOTAL = /\b(?:total|grand\s*total|all\s*in|altogether|sum)\b/i;
 const DEPOSIT = /\b(?:deposit|down\s*payment|upfront)\b/i;
+/* What a figure is FOR, as opposed to how it is counted. The investment pages
+   separate the programme fee from the hotel and the coach, so a price has to
+   carry which of them it belongs to or it cannot be placed. */
+const SUBJECTS = [
+  ['hotel', /\b(?:hotel|venue|accommodation|resort|room|package|stay)\b/i],
+  ['transport', /\b(?:bus|coach|transport|transfer|van)\b/i],
+  ['programme', /\b(?:programme|program|training|facilitation|fees?|teambuilding|team\s*building)\b/i],
+];
 
 /** Every money figure in the text, each labelled by the words around it. */
 function readMoney(t) {
@@ -247,7 +255,9 @@ function readMoney(t) {
     else if (DEPOSIT.test(gapBefore)) basis = 'deposit';
     else if (TOTAL.test(gapBefore)) basis = 'total';
     else if (PER_PAX.test(gapBefore)) basis = 'per pax';
+    const subject = (SUBJECTS.find(([, re]) => re.test(gapBefore)) || [null])[0];
     return {
+      subject,
       text: f.text,
       currency: CUR_NAME[f.symbol] || f.symbol || null,
       amount: f.amount,

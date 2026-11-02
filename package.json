@@ -25,13 +25,14 @@
     "test:deck": "xvfb-run -a electron --no-sandbox test/deck.test.js",
     "build:shared": "node scripts/build-shared.js",
     "check:shared": "node scripts/build-shared.js --check",
-    "test": "npm run test:resolve && npm run test:images && npm run test:layout && npm run test:pricing && npm run test:classify && npm run test:catalog && npm run test:scenario && npm run test:e2e && npm run test:deck",
+    "test": "npm run test:resolve && npm run test:images && npm run test:proposal && npm run test:layout && npm run test:pricing && npm run test:classify && npm run test:catalog && npm run test:scenario && npm run test:e2e && npm run test:deck",
     "test:layout": "node test/layout.test.js",
     "test:catalog": "xvfb-run -a electron --no-sandbox test/catalog.test.js",
     "test:scenario": "xvfb-run -a electron --no-sandbox test/scenario.test.js",
     "inspect:pptx": "node scripts/inspect-pptx.js",
     "test:resolve": "node test/resolve.test.js",
-    "test:images": "node test/template-images.test.js"
+    "test:images": "node test/template-images.test.js",
+    "test:proposal": "node test/proposal.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
