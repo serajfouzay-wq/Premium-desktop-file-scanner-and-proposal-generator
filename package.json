@@ -32,7 +32,8 @@
     "inspect:pptx": "node scripts/inspect-pptx.js",
     "test:resolve": "node test/resolve.test.js",
     "test:images": "node test/template-images.test.js",
-    "test:proposal": "node test/proposal.test.js"
+    "test:proposal": "node test/proposal.test.js",
+    "demo": "node scripts/demo-proposal.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",

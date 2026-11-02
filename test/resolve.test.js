@@ -229,5 +229,23 @@ check('every piece of that sentence was understood',
 check('and nothing was left unexplained', full.ambiguous.length === 0,
   JSON.stringify(full.ambiguous));
 
+console.log('\n── what it says it did not understand must be true ──');
+const honest = resolve(
+  'team building for ABC Sdn Bhd, attn: Ms Joanne Teoh, 45 pax, 14 - 15 March 2026, '
+  + '2D1N at Lexis Hibiscus Port Dickson, MC Sera Fouzay, amazing race and beach olympics, '
+  + 'RM 285 per pax, hotel package RM 180 per pax, depart 8:30am back 6pm',
+  { ...CATALOG, ownCompany: 'Smart Solutions Learning Sdn Bhd' });
+check('it understood the duration', honest.days === 2 && honest.nights === 1);
+check('it understood both times', honest.times.length === 2);
+check('nothing it understood is called unrecognised',
+  honest.unrecognised.length === 0,
+  `claims not to understand: ${honest.unrecognised.join(', ') || '(nothing)'}`);
+const stillHonest = resolve('team building 2D1N 30 pax with kayaking, depart 9am, RM 200 per pax',
+  CATALOG);
+check('a genuinely unknown word is still reported',
+  stillHonest.unrecognised.includes('kayaking'), stillHonest.unrecognised.join(', '));
+check('and only that word', stillHonest.unrecognised.length === 1,
+  stillHonest.unrecognised.join(', '));
+
 console.log(`\n${'─'.repeat(62)}\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

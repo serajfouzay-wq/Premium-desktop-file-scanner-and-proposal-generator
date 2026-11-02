@@ -123,14 +123,17 @@ const readPax = (t) => {
 };
 
 function readDuration(t) {
+  /* `text` is what the reader consumed, so those words are not then reported
+     as unrecognised. Telling someone "2d1n" was not understood, right after
+     showing them "Duration: 2D1N", destroys confidence in the whole report. */
   const dn = t.match(NIGHTS);
-  if (dn) return { days: Number(dn[1]), nights: Number(dn[2]) };
+  if (dn) return { days: Number(dn[1]), nights: Number(dn[2]), text: dn[0] };
   const n = t.match(NIGHTS_ALT);
   const d = t.match(DAYS_ALT);
-  if (n && d) return { days: Number(d[1]), nights: Number(n[1]) };
-  if (n) return { days: Number(n[1]) + 1, nights: Number(n[1]) };
-  if (d) return { days: Number(d[1]), nights: Math.max(0, Number(d[1]) - 1) };
-  return { days: null, nights: null };
+  if (n && d) return { days: Number(d[1]), nights: Number(n[1]), text: `${d[0]} ${n[0]}` };
+  if (n) return { days: Number(n[1]) + 1, nights: Number(n[1]), text: n[0] };
+  if (d) return { days: Number(d[1]), nights: Math.max(0, Number(d[1]) - 1), text: d[0] };
+  return { days: null, nights: null, text: null };
 }
 
 function readDates(t) {
@@ -405,11 +408,23 @@ function resolve(text, catalog = {}) {
     result.location && result.location.name, result.mc && result.mc.name]
     .filter(Boolean).forEach(claim);
   [...result.hotels, ...result.activities, ...result.venues].forEach((e) => claim(e.name));
+  /* Everything the other readers consumed is accounted for too, so what comes
+     back as unrecognised is genuinely unrecognised. */
+  claim(result.dates);
+  claim(result.pic);
+  result.companies.forEach(claim);
+  result.money.forEach((m) => claim(m.text));
+  result.times.forEach((x) => claim(x.text));
+  claim(dur.text);
 
   const FILLER = new Set([...WEAK, 'is', 'be', 'will', 'we', 'need', 'want', 'please', 'make',
     'proposal', 'quote', 'quotation', 'client', 'customer', 'attn', 'attention', 'pic',
     'mc', 'emcee', 'host', 'from', 'to', 'on', 'this', 'that', 'it', 'about', 'around',
-    'people', 'persons', 'participants', 'guests', 'staff', 'pax', 'about']);
+    'people', 'persons', 'participants', 'guests', 'staff', 'pax', 'about',
+    'per', 'package', 'depart', 'departure', 'back', 'return', 'arrive', 'arrival',
+    'night', 'nights', 'day', 'days', 'rate', 'rates', 'price', 'prices', 'cost',
+    'total', 'deposit', 'session', 'inclusive', 'includes', 'including', 'incl',
+    'compare', 'option', 'options', 'quoted', 'each', 'all', 'and', 'with', 'our']);
   result.unrecognised = norm(t).split(' ')
     .filter((w) => w.length > 2 && !/^\d+$/.test(w) && !claimed.has(w) && !FILLER.has(w)
       && !new RegExp(`^(${MONTHS})$`, 'i').test(w))
