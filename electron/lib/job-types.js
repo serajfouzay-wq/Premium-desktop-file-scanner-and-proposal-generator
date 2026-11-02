@@ -117,6 +117,27 @@ const TEAM_BUILDING = {
     { slide: 1, pic: 0, field: 'coverPhoto' },
   ],
 
+  /* How this template groups money. The investment pages name four items and
+     the engine has to know which catalog records feed each one, because the
+     tax line sits under A+B only: a hotel bill carries its own tax, so adding
+     8% to it here would overcharge the client.
+
+         (A) training professional fees  the host, the activities
+         (B) event management fees       coordination and production
+         (C) hotel, meals, meeting room  accommodation and the venue
+         (D) transportation              the coach
+
+     A+B is taxed, then GRAND TOTAL = (A+B incl. tax) + C + D, which is what
+     page 9 spells out. */
+  money: {
+    taxedItems: ['programme'],
+    items: {
+      programme: { label: 'A + B', takes: ['mc', 'activities', 'logistics'] },
+      venue: { label: 'C', takes: ['hotel', 'room', 'venue'] },
+      transport: { label: 'D', takes: ['transport'] },
+    },
+  },
+
   /* What the person must have given us before a deck is worth producing.
      Everything else is optional and simply left as the template had it. */
   required: ['company', 'groupSize', 'programDate'],

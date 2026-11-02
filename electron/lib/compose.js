@@ -14,7 +14,37 @@
        is named in `missing`, which is far easier to spot than a wrong number.
      - Nothing is rounded on the way through: money is held in cents. */
 
+const pricing = require('./pricing');
+
 const pad2 = (n) => String(n).padStart(2, '0');
+
+/* ── where a price comes from ──
+   The catalog is the normal source: the rates are already stored against the
+   hotel, the host and each activity, so nobody should have to retype them. A
+   figure typed into the request overrides the catalog for that one item, which
+   is how a one-off discount or a rate the client negotiated gets in.
+
+   Costs never reach this function's output. pricing.calculate carries what an
+   item costs us alongside what the client is shown, and only the client side
+   is ever read here; the cost lives on in the quote for the person quoting. */
+
+/** The client-facing total of one group of catalog selections, in cents. */
+function itemCents(selection, resolved, rates = {}) {
+  if (!selection) return null;
+  const quote = pricing.calculate(
+    {
+      ...selection,
+      pax: resolved.pax,
+      nights: resolved.nights,
+      days: resolved.days,
+    },
+    /* Service charge and tax are applied by the template, not per item, and
+       rounding here would make the parts disagree with the total. */
+    { ...rates, serviceChargePct: 0, taxPct: 0, rounding: 'none' },
+  );
+  if (!quote.lines.length) return null;
+  return { cents: pricing.toCents(quote.total), quote };
+}
 
 /** 2 significant words of a company name, for a reference number. */
 function abbreviate(company) {
@@ -67,7 +97,14 @@ function programLine(resolved) {
  * @param {object} resolved  from resolve()
  * @param {object} opts      { sequence, revision, preparedBy, preparedByEmail,
  *                             preparedByMobile, taxPct, coverPhoto, now,
- *                             transportIncluded }
+ *                             transportIncluded, selections, rates }
+ *
+ * `selections` groups catalog records the way the template groups money:
+ *   { programme: { mc, activities, logistics },
+ *     venue:     { hotel, room, venue },
+ *     transport: { logistics: [...] } }
+ * Anything left out is simply not priced, and the template keeps its own
+ * placeholder there rather than being given a number nobody chose.
  */
 function compose(resolved, opts = {}) {
   const values = {};
@@ -83,7 +120,6 @@ function compose(resolved, opts = {}) {
   if (opts.preparedBy) values.preparedBy = opts.preparedBy;
   if (opts.preparedByEmail) values.preparedByEmail = opts.preparedByEmail;
   if (opts.preparedByMobile) values.preparedByMobile = opts.preparedByMobile;
-  if (resolved.pax != null) values.capacityNote = `${resolved.pax} participants`;
 
   const line = programLine(resolved);
   if (line) { values.programDate = line; values.programDateDuration = line; }
@@ -96,81 +132,126 @@ function compose(resolved, opts = {}) {
   });
 
   /* ── money ──
-     The template's own arithmetic, which is printed on the pages:
-         (A)+(B) programme fee      page 8, from a rate somebody typed
-         + 8% sales and service tax page 8
-         = TOTAL FOR ITEM A + B     page 8
-         (C) hotel                  page 9
-         (D) transport              page 9
-         = GRAND TOTAL A+B+C+D      page 9, repeated on page 12
-     Only the rates are read from what was typed; every line above is that
-     arithmetic and is listed in `computed`. The grand total has to include
-     (C) and (D), which is the whole point of its wording — a grand total that
-     silently omits the hotel is the kind of mistake a client notices. */
+     The template's own arithmetic, printed on its pages:
+         (A)+(B) programme     the host, the activities, coordination
+         + 8% sales and service tax
+         = TOTAL FOR ITEM A + B                                  page 8
+         (C) hotel, meals, meeting room                          page 9
+         (D) transportation                                      page 9
+         = GRAND TOTAL A + B + C + D                      pages 9 and 12
+
+     Each item is priced from the catalog, because the rates are already
+     stored there. A figure in the typed request overrides the catalog for that
+     item and the override is recorded, so it is obvious later which numbers
+     came from the database and which somebody set by hand. */
   const typed = resolved.money || [];
-  /* A figure for the hotel belongs on page 9, not page 8, so the programme
-     rate is the per-pax figure that is NOT about the venue or the coach. */
   const notVenue = (m) => m.subject !== 'hotel' && m.subject !== 'transport';
-  const perPax = typed.find((m) => m.basis === 'per pax' && notVenue(m));
-  const stated = typed.find((m) => m.basis === 'total' && notVenue(m));
-  const venue = typed.find((m) => m.subject === 'hotel');
-  const currency = (perPax || stated || venue || {}).currency || 'RM';
+  const typedPerPax = typed.find((m) => m.basis === 'per pax' && notVenue(m));
+  const typedTotal = typed.find((m) => m.basis === 'total' && notVenue(m));
+  const typedVenue = typed.find((m) => m.subject === 'hotel');
+  const typedTransport = typed.find((m) => m.subject === 'transport');
+  const currency = (typedPerPax || typedTotal || typedVenue || {}).currency || 'RM';
 
-  let abCents = null;      // (A)+(B) including tax — the page 8 total
-  let venueCents = null;   // (C)
-  let transportCents = null; // (D)
+  const sel = opts.selections || {};
+  const rates = opts.rates || {};
+  const fromCatalog = {
+    programme: itemCents(sel.programme, resolved, rates),
+    venue: itemCents(sel.venue, resolved, rates),
+    transport: itemCents(sel.transport, resolved, rates),
+  };
 
-  if (perPax) {
-    values.programUnitPrice = money(perPax.cents, currency);
-    values.rateNote = `RM ${money(perPax.cents, 'RM')}`;
+  /* (A)+(B), before tax. */
+  let feeCents = null;
+  if (typedPerPax && resolved.pax) {
+    feeCents = typedPerPax.cents * resolved.pax;
+    values.programUnit = `${resolved.pax} pax`;
+    values.programUnitPrice = money(typedPerPax.cents, currency);
+    values.rateNote = `RM ${money(typedPerPax.cents, 'RM')}`;
+    computed.push(`programme fee = ${money(typedPerPax.cents, currency)} x ${resolved.pax} pax `
+      + `= ${money(feeCents, currency)}  (rate typed into the request)`);
+    if (fromCatalog.programme && fromCatalog.programme.cents !== feeCents) {
+      notes.push(`The typed rate gives ${money(feeCents, currency)} for the programme, where `
+        + `the catalog gives ${money(fromCatalog.programme.cents, currency)}. The typed rate `
+        + 'is used.');
+    }
+  } else if (typedPerPax && !resolved.pax) {
+    notes.push('A per-pax rate was given but no head count, so no line total was worked out.');
+  } else if (fromCatalog.programme) {
+    feeCents = fromCatalog.programme.cents;
     if (resolved.pax) {
+      const per = Math.round(feeCents / resolved.pax);
       values.programUnit = `${resolved.pax} pax`;
-      const feeCents = perPax.cents * resolved.pax;
-      values.programTotal = money(feeCents, currency);
-      computed.push(`programme fee = ${money(perPax.cents, currency)} x ${resolved.pax} pax `
-        + `= ${money(feeCents, currency)}`);
-      const tax = Math.round(feeCents * (taxPct / 100));
-      values.salesTax = money(tax, currency);
-      abCents = feeCents + tax;
-      computed.push(`sales tax = ${taxPct}% of ${money(feeCents, currency)} = ${money(tax, currency)}`);
-      computed.push(`total for item A + B = ${money(abCents, currency)}`);
+      values.programUnitPrice = money(per, currency);
+      values.rateNote = `RM ${money(per, 'RM')}`;
+      computed.push(`programme fee ${money(feeCents, currency)} from the catalog `
+        + `(${fromCatalog.programme.quote.lines.length} item(s)), which is `
+        + `${money(per, currency)} per pax across ${resolved.pax}`);
     } else {
-      notes.push('A per-pax rate was given but no head count, so no line total was worked out.');
+      values.programUnit = '1';
+      values.programUnitPrice = money(feeCents, currency);
+      computed.push(`programme fee ${money(feeCents, currency)} from the catalog`);
     }
   }
+  if (feeCents != null) values.programTotal = money(feeCents, currency);
 
-  if (stated) {
-    /* A total they stated wins: it may cover items the engine knows nothing
-       about. If it disagrees with the rate multiplied out, that is said. */
-    if (abCents != null && stated.cents !== abCents) {
-      notes.push(`The stated total (${money(stated.cents, currency)}) differs from the rate `
+  /* Tax, then the page 8 total. */
+  let abCents = null;
+  if (feeCents != null) {
+    const tax = Math.round(feeCents * (taxPct / 100));
+    values.salesTax = money(tax, currency);
+    abCents = feeCents + tax;
+    computed.push(`sales tax = ${taxPct}% of ${money(feeCents, currency)} = ${money(tax, currency)}`);
+    computed.push(`total for item A + B = ${money(abCents, currency)}`);
+  }
+  if (typedTotal) {
+    if (abCents != null && typedTotal.cents !== abCents) {
+      notes.push(`The stated total (${money(typedTotal.cents, currency)}) differs from the figure `
         + `worked out with tax (${money(abCents, currency)}). The stated total is used.`);
     }
-    abCents = stated.cents;
+    abCents = typedTotal.cents;
+    computed.push(`total for item A + B = ${money(abCents, currency)}  (stated in the request)`);
   }
   if (abCents != null) values.totalAB = money(abCents, currency);
 
-  if (venue) {
-    const vc = venue.currency || currency;
-    values.venueUnitPrice = money(venue.cents, vc);
-    if (venue.basis === 'per pax' && resolved.pax) {
+  /* (C) the hotel. */
+  let venueCents = null;
+  if (typedVenue) {
+    if (typedVenue.basis === 'per pax' && resolved.pax) {
+      venueCents = typedVenue.cents * resolved.pax;
       values.venueUnit = `${resolved.pax} pax`;
-      venueCents = venue.cents * resolved.pax;
-      computed.push(`hotel = ${money(venue.cents, vc)} x ${resolved.pax} pax `
-        + `= ${money(venueCents, vc)}`);
+      values.venueUnitPrice = money(typedVenue.cents, currency);
+      computed.push(`hotel = ${money(typedVenue.cents, currency)} x ${resolved.pax} pax `
+        + `= ${money(venueCents, currency)}  (rate typed into the request)`);
     } else {
+      venueCents = typedVenue.cents;
       values.venueUnit = '1';
-      venueCents = venue.cents;
+      values.venueUnitPrice = money(venueCents, currency);
+      computed.push(`hotel = ${money(venueCents, currency)}  (typed into the request)`);
     }
-    values.venueTotal = money(venueCents, vc);
+  } else if (fromCatalog.venue) {
+    venueCents = fromCatalog.venue.cents;
+    const per = resolved.pax ? Math.round(venueCents / resolved.pax) : venueCents;
+    values.venueUnit = resolved.pax ? `${resolved.pax} pax` : '1';
+    values.venueUnitPrice = money(per, currency);
+    computed.push(`hotel ${money(venueCents, currency)} from the catalog `
+      + `(${fromCatalog.venue.quote.lines.length} item(s))`);
   }
+  if (venueCents != null) values.venueTotal = money(venueCents, currency);
 
-  /* The template prints "FREE" against the coach, so its line total is zero.
-     That is the template's own statement, not a figure the engine invented. */
-  if (opts.transportIncluded !== false) {
+  /* (D) the coach. The template prints "FREE" against it, so unless a figure
+     is given its line total is the zero the template itself states. */
+  let transportCents = null;
+  if (typedTransport) {
+    transportCents = typedTransport.basis === 'per pax' && resolved.pax
+      ? typedTransport.cents * resolved.pax : typedTransport.cents;
+    computed.push(`transport = ${money(transportCents, currency)}  (typed into the request)`);
+  } else if (fromCatalog.transport) {
+    transportCents = fromCatalog.transport.cents;
+    computed.push(`transport ${money(transportCents, currency)} from the catalog`);
+  } else if (opts.transportIncluded !== false) {
     transportCents = 0;
-    values.transportTotal = money(0, currency);
   }
+  if (transportCents != null) values.transportTotal = money(transportCents, currency);
 
   if (abCents != null || venueCents != null) {
     const grand = (abCents || 0) + (venueCents || 0) + (transportCents || 0);
@@ -182,14 +263,16 @@ function compose(resolved, opts = {}) {
       ].filter(Boolean).join(' + ')
       + ` = ${money(grand, currency)}`);
     if (venueCents == null) {
-      notes.push('No hotel price was given, so the grand total covers the programme fee only. '
-        + 'Page 9 keeps its own placeholders.');
+      notes.push('No hotel price was given and none is in the catalog for this request, so the '
+        + 'grand total covers the programme only. Page 9 keeps its own placeholders.');
     }
   }
 
-  if (!typed.length) {
-    notes.push('No price was given, so every price on pages 8, 9 and 12 is left as the '
-      + 'template has it. The engine does not invent a figure.');
+  if (resolved.pax != null) values.capacityNote = `${resolved.pax} participants`;
+
+  if (!typed.length && !fromCatalog.programme && !fromCatalog.venue) {
+    notes.push('No price was typed and none was found in the catalog, so every price on pages '
+      + '8, 9 and 12 is left as the template has it. The engine does not invent a figure.');
   }
 
   if (opts.coverPhoto) values.coverPhoto = opts.coverPhoto;

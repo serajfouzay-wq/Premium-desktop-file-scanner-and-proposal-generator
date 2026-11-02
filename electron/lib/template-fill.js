@@ -123,6 +123,7 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
   const photos = [];
   const skipped = [];
   const problems = [];
+  const originals = new Map();
 
   for (const [slide, entries] of bySlide) {
     const name = `ppt/slides/slide${slide}.xml`;
@@ -161,7 +162,7 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
           continue;
         }
         /* Keep the first run's formatting, drop the rest of the cell's text. */
-        edits.push({ start: cell.runs[0].start, end: cell.runs[0].end, text: escapeXml(value) });
+        edits.push({ start: cell.runs[0].start, end: cell.runs[0].end, text: escapeXml(value), field: entry.field });
         for (let i = 1; i < cell.runs.length; i += 1) {
           edits.push({ start: cell.runs[i].start, end: cell.runs[i].end, text: '' });
         }
@@ -201,7 +202,7 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
         const crop = coverCrop(frame.ratio, size.width / size.height);
         const rId = await addImageRel(zip, slide, buffer, ext);
         const body = repointPictureBody(original.slice(frame.start, frame.end), rId, crop);
-        edits.push({ start: frame.start, end: frame.end, text: body, isPicture: true });
+        edits.push({ start: frame.start, end: frame.end, text: body, isPicture: true, field: entry.field });
         photos.push({
           slide,
           pic: entry.pic,
@@ -235,7 +236,7 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
           continue;
         }
         if (value == null || value === '') { skipped.push(entry.field); continue; }
-        edits.push({ start: next.start, end: next.end, text: escapeXml(value) });
+        edits.push({ start: next.start, end: next.end, text: escapeXml(value), field: entry.field });
         written.push({ slide, after: entry.after, field: entry.field, value: String(value) });
         continue;
       }
@@ -265,6 +266,7 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
             start: r.start,
             end: r.end,
             text: escapeXml(r.text.split(entry.find).join(replacement)),
+            field: entry.field || entry.find,
           });
         }
         written.push({
@@ -288,25 +290,38 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
       }
       if (!entry.clear && (value == null || value === '')) { skipped.push(entry.field); continue; }
       const text = entry.clear ? '' : escapeXml(value);
-      edits.push({ start: run.start, end: run.end, text });
+      edits.push({ start: run.start, end: run.end, text, field: entry.field });
       written.push({ slide, slot: entry.slot, field: entry.field, value: entry.clear ? '' : String(value) });
     }
 
-    /* Two mapping entries pointing at the same text would corrupt the file, so
-       that is caught rather than applied. */
+    /* Two mapping entries pointing at the same run is a fault in the mapping,
+       not drift in the template, and applying both would leave overlapping
+       replacements in the XML — a file PowerPoint offers to repair. So this
+       stops the fill whatever `strict` says: tolerating a mismatch is one
+       thing, writing a broken file is another. */
     const sorted = edits.slice().sort((a, b) => a.start - b.start);
+    const clashes = [];
     for (let i = 1; i < sorted.length; i += 1) {
       if (sorted[i].start < sorted[i - 1].end) {
-        problems.push(`slide ${slide}: two mapping entries write to the same place `
+        clashes.push(`slide ${slide}: two mapping entries write to the same place `
+          + `(${sorted[i - 1].field || '?'} and ${sorted[i].field || '?'}) `
           + '— one of them is addressing the wrong target');
       }
     }
+    if (clashes.length) {
+      const err = new Error(`The mapping addresses the same place twice:\n  ${clashes.join('\n  ')}`);
+      err.problems = clashes;
+      throw err;
+    }
 
     let xml = original;
-    for (const e of sorted.reverse()) {
+    for (const e of sorted.slice().reverse()) {
       xml = xml.slice(0, e.start) + e.text + xml.slice(e.end);
     }
     zip.file(name, xml);
+    /* Kept so the leftover scan can address runs as they are in the TEMPLATE,
+       which is what a mapping entry refers to. */
+    originals.set(slide, { xml: original, applied: sorted.map((e) => [e.start, e.end]) });
   }
 
   /* What is still a placeholder. A deck that reaches a client with "xxx" on
@@ -316,16 +331,33 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
   const remaining = [];
   for (const n of Object.keys(zip.files).filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f))) {
     const slide = slideNumber(n);
-    const xml = await zip.file(n).async('string');
+    /* Measured on the TEMPLATE, not on what was just written. A slot number
+       taken from the filled file is useless for addressing: the runs we filled
+       no longer look like placeholders, so every index after them has shifted,
+       and handing that number back would write to the wrong run. */
+    const cached = originals.get(slide);
+    const xml = cached ? cached.xml : await zip.file(n).async('string');
+    const applied = cached ? cached.applied : [];
     const all = runsOf(xml);
+    const slotsHere = all.filter(isPlaceholder);
     all.forEach((r, i) => {
       if (!/^[\s]*[xX]{2,}[\s.:·–-]*$/.test(r.text)) return;
+      /* Skip the ones this fill wrote to. */
+      if (applied.some(([a, b]) => r.start >= a && r.end <= b)) return;
       const before = all.slice(Math.max(0, i - 2), i).map((x) => x.text).join(' ').trim();
+      const slot = slotsHere.indexOf(r);
       remaining.push({
         slide,
+        slot: slot >= 0 ? slot : null,
         text: r.text.trim(),
         highlighted: r.highlighted,
         after: before.slice(-48) || null,
+        /* Pass this straight back to fill() with a field name to have it
+           filled: the interface can offer the leftover to the person and
+           place what they type without them opening PowerPoint. */
+        address: slot >= 0
+          ? { slide, slot }
+          : { slide, after: before.replace(/\s+/g, ' ').trim().split(' ').slice(-2).join(' ') || null },
       });
     });
   }
