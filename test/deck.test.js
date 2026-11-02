@@ -61,8 +61,23 @@ app.whenReady().then(async () => {
     check('catalog seeds itself', seeded.hotels > 0 && seeded.activities > 0,
       `${seeded.hotels} hotels, ${seeded.activities} activities, ${seeded.templates} templates`);
 
-    // Attach the generated placeholder images if the seeder has been run.
-    const imgDir = process.env.CATALOG_IMAGE_DIR;
+    /* Attach photographs. The seeder's images are used when it has been run;
+       otherwise the test draws its own, so this assertion measures the deck
+       builder rather than whether an environment variable happens to be set. */
+    let imgDir = process.env.CATALOG_IMAGE_DIR;
+    if (!imgDir || !fs.existsSync(imgDir)) {
+      const { writePng } = require('./helpers/png');
+      imgDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deck-photos-'));
+      for (const h of catalog.listHotels()) {
+        writePng(path.join(imgDir, `hotel_${h.id}_1.png`), 1600, 900, [40, 90, 160]);
+      }
+      for (const m of catalog.listMcs()) {
+        writePng(path.join(imgDir, `mc_${m.id}_1.png`), 900, 1200, [120, 70, 140]);
+      }
+      for (const a of catalog.listActivities()) {
+        writePng(path.join(imgDir, `activity_${a.id}_1.png`), 2000, 1333, [40, 130, 90]);
+      }
+    }
     let imageCount = 0;
     if (imgDir && fs.existsSync(imgDir)) {
       const files = fs.readdirSync(imgDir);
