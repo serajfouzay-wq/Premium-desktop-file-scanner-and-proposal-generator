@@ -1,7 +1,7 @@
 'use strict';
 /* Reading a typed request against the catalog, with no model involved.
    Run with: npm run test:resolve */
-const { resolve, describe: explain } = require('../electron/lib/resolve');
+const { resolve, describe: explain, stripDocumentWords } = require('../electron/lib/resolve');
 
 let pass = 0; let fail = 0;
 const check = (name, ok, detail = '') => {
@@ -246,6 +246,46 @@ check('a genuinely unknown word is still reported',
   stillHonest.unrecognised.includes('kayaking'), stillHonest.unrecognised.join(', '));
 check('and only that word', stillHonest.unrecognised.length === 1,
   stillHonest.unrecognised.join(', '));
+
+console.log('\n── the job type, named the way people name it ──');
+/* The catalog's own wording, which is not the wording anybody types. */
+const REAL_TYPES = {
+  ...CATALOG,
+  jobTypes: [
+    { id: 'tpl_team', name: 'Team Building Proposal' },
+    { id: 'tpl_gala', name: 'Annual Gala Dinner' },
+    { id: 'tpl_conf', name: 'Corporate Conference' },
+  ],
+};
+for (const [typed, want] of [
+  ['this job is a team building for ABC Sdn Bhd, 45 pax', 'tpl_team'],
+  ['team building 30 pax', 'tpl_team'],
+  ['teambuilding at Lexis, 40 pax', 'tpl_team'],
+  ['we need a gala dinner', 'tpl_gala'],
+  ['annual dinner 120 pax', 'tpl_gala'],
+  ['corporate conference, 80 pax', 'tpl_conf'],
+  ['a conference for 60', 'tpl_conf'],
+]) {
+  const got = resolve(typed, REAL_TYPES).jobType;
+  check(`"${typed.slice(0, 44)}"`, got && got.id === want, got ? got.name : 'not recognised');
+}
+check('a request naming no job at all recognises none',
+  resolve('something for next month, 40 pax', REAL_TYPES).jobType === null);
+check('"Proposal" is dropped from the name before matching',
+  stripDocumentWords('Team Building Proposal') === 'Team Building'
+  && stripDocumentWords('Teambuilding Package Proposal') === 'Teambuilding',
+  stripDocumentWords('Team Building Proposal'));
+check('a name that is only a document word survives being stripped',
+  stripDocumentWords('Proposal') === 'Proposal');
+/* Two types that fit equally well must be asked about, not guessed. */
+const twinTypes = {
+  ...CATALOG,
+  jobTypes: [{ id: 'a', name: 'Team Dinner' }, { id: 'b', name: 'Company Dinner' }],
+};
+const tie = resolve('we need a dinner for 80 pax', twinTypes);
+check('two job types fitting equally well are reported as ambiguous',
+  !tie.jobType && tie.ambiguous.some((a) => a.field === 'job type'),
+  JSON.stringify(tie.ambiguous.map((a) => a.options.map((o) => o.name))));
 
 console.log(`\n${'─'.repeat(62)}\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

@@ -21,6 +21,13 @@ contextBridge.exposeInMainWorld('cabinet', {
     openPath: (p) => invoke('app:openPath', p),
     revealPath: (p) => invoke('app:revealPath', p),
   },
+  proposal: {
+    jobTypes: () => invoke('proposal:jobTypes'),
+    chooseTemplate: () => invoke('proposal:chooseTemplate'),
+    template: () => invoke('proposal:template'),
+    read: (text) => invoke('proposal:read', text),
+    build: (payload) => invoke('proposal:build', payload),
+  },
   settings: {
     get: () => invoke('settings:get'),
     update: (patch) => invoke('settings:update', patch),

@@ -20,6 +20,17 @@ const DEFAULTS = {
      deep: start the recognition engine on demand and read them. */
   scanner: { mode: 'fast' },
   model: { apiKey: '', model: 'claude-sonnet-5', enabled: false },
+  /* Proposals built from a typed request. `template` is the client's own
+     PowerPoint, which the engine fills rather than redrawing; the three
+     preparedBy fields are the consultant's own details, which belong on every
+     proposal and should not be retyped for each one. */
+  proposals: {
+    template: null,
+    preparedBy: '',
+    preparedByEmail: '',
+    preparedByMobile: '',
+    sequence: 0,
+  },
 };
 
 let file = null;

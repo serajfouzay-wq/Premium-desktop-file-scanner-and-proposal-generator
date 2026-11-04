@@ -19,6 +19,10 @@ const pricing = require('./lib/pricing');
 const deck = require('./lib/deck');
 const { renderDocument } = require('./lib/document-template');
 const exporters = require('./lib/exporters');
+const templateFill = require('./lib/template-fill');
+const jobTypes = require('./lib/job-types');
+const { resolve: readRequest, describe: describeRequest } = require('./lib/resolve');
+const { compose } = require('./lib/compose');
 
 const isDev = process.env.NODE_ENV === 'development';
 const DEV_URL = 'http://localhost:5273';
@@ -394,6 +398,167 @@ async function fileDocument(file) {
 }
 
 /* ----------------------------------------------------------------- library */
+
+/* ─────────────── proposals from a typed request ───────────────
+   Somebody types what the job is; the catalog is searched for every record
+   named; the client's own PowerPoint template is filled. No model is involved
+   at any point — it is pattern matching against the catalog, then arithmetic.
+   The optional API key in Settings is not consulted here and never has to be. */
+
+/** The catalog in the shape the reader expects, with the stored rates. */
+const catalogForReading = () => ({
+  jobTypes: catalog.listTemplates(),
+  locations: catalog.listLocations(),
+  hotels: catalog.listHotels(),
+  mcs: catalog.listMcs(),
+  activities: catalog.listActivities(),
+  venues: catalog.listVenues(),
+  ownCompany: (settings.get().brand || {}).name || null,
+});
+
+handle('proposal:jobTypes', () => jobTypes.JOB_TYPES.map((j) => ({
+  id: j.id, name: j.name, template: j.template, slides: j.slides,
+  required: j.required,
+})));
+
+handle('proposal:chooseTemplate', async () => {
+  const picked = await dialog.showOpenDialog({
+    title: 'Choose the PowerPoint template to fill',
+    properties: ['openFile'],
+    filters: [{ name: 'PowerPoint', extensions: ['pptx', 'potx'] }],
+  });
+  if (picked.canceled || !picked.filePaths.length) return null;
+  const file = picked.filePaths[0];
+  /* Read it straight away, so a template that does not match is caught here
+     rather than when somebody is waiting for a deck. */
+  const found = await templateFill.inspect(file);
+  settings.update({ proposals: { ...(settings.get().proposals || {}), template: file } });
+  return { path: file, slides: found.slides, placeholders: found.placeholders.length };
+});
+
+handle('proposal:template', () => {
+  const file = (settings.get().proposals || {}).template || null;
+  return file && fs.existsSync(file) ? file : null;
+});
+
+/* What the engine understood, shown before anything is produced. */
+handle('proposal:read', (text) => {
+  const resolved = readRequest(text || '', catalogForReading());
+  return {
+    understood: describeRequest(resolved),
+    ambiguous: resolved.ambiguous.map((a) => ({
+      field: a.field, options: a.options.map((o) => ({ id: o.id, name: o.name })),
+    })),
+    unrecognised: resolved.unrecognised,
+    notes: resolved.notes,
+    found: {
+      jobType: resolved.jobType ? resolved.jobType.name : null,
+      company: resolved.company,
+      pic: resolved.pic,
+      pax: resolved.pax,
+      dates: resolved.dates,
+      duration: resolved.days ? `${resolved.days}D${resolved.nights || 0}N` : null,
+      location: resolved.location ? resolved.location.name : null,
+      hotels: resolved.hotels.map((h) => h.name),
+      venues: resolved.venues.map((v) => v.name),
+      mc: resolved.mc ? resolved.mc.name : null,
+      activities: resolved.activities.map((a) => a.name),
+      money: resolved.money.map((m) => ({ text: m.text, basis: m.basis, subject: m.subject })),
+      times: resolved.times.map((t) => t.value),
+    },
+  };
+});
+
+handle('proposal:build', async ({ text, jobTypeId, sequence, revision }) => {
+  const job = jobTypes.byId(jobTypeId || 'team_building');
+  if (!job) throw new Error('That job type is not set up yet.');
+
+  const template = (settings.get().proposals || {}).template;
+  if (!template || !fs.existsSync(template)) {
+    throw new Error('Choose the PowerPoint template first — the engine fills your own file.');
+  }
+
+  const resolved = readRequest(text || '', catalogForReading());
+
+  /* The records named, grouped the way the template groups money. The rates
+     and the pictures come from the catalog, so nobody retypes them. */
+  const hotel = resolved.hotels[0] || null;
+  const rooms = hotel ? catalog.listRooms(hotel.id) : [];
+  const room = rooms.length ? rooms[0] : null;
+  const transport = catalog.listLogistics()
+    .filter((l) => /transport|bus|coach|transfer/i.test(`${l.category} ${l.name}`));
+
+  const selections = {
+    programme: { mc: resolved.mc, activities: resolved.activities },
+    venue: hotel && room ? { hotel, room, venue: resolved.venues[0] || null } : null,
+    transport: transport.length ? { logistics: [transport[0]] } : null,
+  };
+
+  const brand = settings.get().brand || {};
+  const prefs = settings.get().proposals || {};
+  const built = compose(resolved, {
+    selections,
+    rates: settings.get().rates || {},
+    photoLookup: (type, id) => catalog.imagesFor(type, id).map((i) => i.file_path || i.path),
+    preparedBy: prefs.preparedBy || brand.name || null,
+    preparedByEmail: prefs.preparedByEmail || brand.email || null,
+    preparedByMobile: prefs.preparedByMobile || brand.phone || null,
+    sequence: sequence || (prefs.sequence || 0) + 1,
+    revision: revision || 0,
+  });
+
+  const missing = jobTypes.missingFor(job, built.values);
+
+  const root = settings.get().library.root;
+  const safe = (built.values.company || 'Client').replace(/[^\w ]+/g, '').trim() || 'Client';
+  const target = organize.plan(root, {
+    company: safe,
+    folder: 'Proposals',
+    typeLabel: 'Proposal',
+    date: new Date().toISOString().slice(0, 10),
+    ext: 'pptx',
+  });
+  await fsp.mkdir(target.dir, { recursive: true });
+  const dest = fs.existsSync(target.full)
+    ? target.full.replace(/\.pptx$/, `_${Date.now().toString(36)}.pptx`)
+    : target.full;
+
+  /* strict:false so a template the designer has edited still produces a deck,
+     with every mismatch reported rather than the whole job refused. */
+  const result = await templateFill.fill(template, dest, jobTypes.mappingFor(job),
+    built.values, { strict: false });
+
+  /* The running number advances only once a deck has actually been written,
+     so a failed attempt does not burn a reference. */
+  if (!sequence) {
+    settings.update({ proposals: { ...prefs, sequence: (prefs.sequence || 0) + 1 } });
+  }
+
+  return {
+    path: result.path,
+    bytes: result.bytes,
+    reference: built.values.reference,
+    understood: describeRequest(resolved),
+    placed: result.written.length,
+    photos: result.photos.map((p) => ({
+      slide: p.slide,
+      added: !!p.added,
+      grid: p.grid || null,
+      size: `${p.image.width}x${p.image.height}`,
+      trimmed: Math.round(Math.max(p.crop.l, p.crop.t) / 1000),
+    })),
+    cleared: result.blanked.length,
+    removedSentences: result.leftInProse.length,
+    problems: result.problems,
+    missing,
+    computed: built.computed,
+    notes: built.notes,
+    unrecognised: resolved.unrecognised,
+    ambiguous: resolved.ambiguous.map((a) => ({
+      field: a.field, options: a.options.map((o) => o.name),
+    })),
+  };
+});
 
 handle('library:companies', () => db.listCompanies());
 handle('library:documents', (company) => db.listDocuments(company).map((d) => ({ ...d, body: undefined, preview: (d.body || '').slice(0, 800) })));

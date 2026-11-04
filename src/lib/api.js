@@ -31,6 +31,20 @@ export const api = {
   openPath: (p) => (isDesktop ? unwrap(bridge().app.openPath(p)) : demo.openPath()),
   revealPath: (p) => (isDesktop ? unwrap(bridge().app.revealPath(p)) : demo.revealPath()),
 
+  /* Proposals from a typed request. In the browser preview there is no main
+     process, so these report plainly rather than pretending to work. */
+  proposal: {
+    jobTypes: () => (isDesktop ? unwrap(bridge().proposal.jobTypes())
+      : Promise.resolve([{ id: 'team_building', name: 'Team Building', slides: 12 }])),
+    chooseTemplate: () => (isDesktop ? unwrap(bridge().proposal.chooseTemplate())
+      : Promise.reject(new Error('Choosing a file needs the installed app.'))),
+    template: () => (isDesktop ? unwrap(bridge().proposal.template()) : Promise.resolve(null)),
+    read: (text) => (isDesktop ? unwrap(bridge().proposal.read(text))
+      : Promise.reject(new Error('Reading a request needs the installed app.'))),
+    build: (payload) => (isDesktop ? unwrap(bridge().proposal.build(payload))
+      : Promise.reject(new Error('Building a deck needs the installed app.'))),
+  },
+
   settings: {
     get: () => (isDesktop ? unwrap(bridge().settings.get()) : demo.settings.get()),
     update: (patch) => (isDesktop ? unwrap(bridge().settings.update(patch)) : demo.settings.update(patch)),

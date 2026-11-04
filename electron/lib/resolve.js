@@ -36,20 +36,31 @@ const norm = (s) => String(s || '')
 
 /* Words too common to identify anything on their own. A hotel called "The
    Resort" should not match on "resort". */
+/* For a job type, only the words that would be weak in any sentence. */
+const JOB_WEAK = new Set(['the', 'and', 'for', 'with', 'at', 'in', 'of', 'a', 'an']);
+/* "Team Building Proposal" is the same job as "Team Building". */
+const DOCUMENT_WORDS = /\s+(proposal|proposals|package|packages|quote|quotation|template|deck|programme|program)$/i;
+const stripDocumentWords = (name) => {
+  let out = String(name || '');
+  for (let i = 0; i < 3; i += 1) out = out.replace(DOCUMENT_WORDS, '');
+  return out.trim() || String(name || '');
+};
+
 const WEAK = new Set([
   'hotel', 'resort', 'the', 'and', 'for', 'with', 'at', 'in', 'of', 'a', 'an',
   'star', 'by', 'pax', 'day', 'days', 'night', 'nights', 'program', 'programme',
   'activity', 'activities', 'team', 'building', 'event', 'venue', 'centre', 'center',
 ]);
 
-const distinctive = (name) => norm(name).split(' ').filter((w) => w.length > 2 && !WEAK.has(w));
+const distinctive = (name, weak = WEAK) => norm(name).split(' ')
+  .filter((w) => w.length > 2 && !weak.has(w));
 
 /**
  * Find every catalog entry whose name appears in the text.
  * Returns matches sorted longest-first, so the caller can take the best and
  * then exclude the span it consumed.
  */
-function findMatches(haystack, entries, nameOf = (e) => e.name) {
+function findMatches(haystack, entries, nameOf = (e) => e.name, weak = WEAK) {
   const hay = ` ${norm(haystack)} `;
   const found = [];
 
@@ -66,7 +77,7 @@ function findMatches(haystack, entries, nameOf = (e) => e.name) {
     /* Otherwise every distinctive word of the name must be present. Requiring
        all of them is what stops "Villea Port Dickson" matching a sentence that
        only says "Port Dickson". */
-    const words = distinctive(full);
+    const words = distinctive(full, weak);
     if (!words.length) continue;
     const hit = words.filter((w) => hay.includes(` ${w} `) || hay.includes(` ${w}s `));
     if (hit.length === words.length) {
@@ -309,6 +320,56 @@ function readTimes(t) {
   return found.map(({ index, ...rest }) => rest);
 }
 
+
+/**
+ * Which job the request is for.
+ *
+ * Job types get their own matcher rather than another option on findMatches,
+ * because they are a handful of curated records and the way people name them
+ * is nothing like the way they name a hotel. Three things it has to survive:
+ *
+ *   "this job is a team building"  — the catalog says "Team Building Proposal"
+ *   "teambuilding at Lexis"        — written as one word
+ *   "we need a gala dinner"        — the catalog says "Annual Gala Dinner"
+ *
+ * So the document words are dropped, spaces are ignored for comparison, and a
+ * partial match counts: the type matching the most of its own words wins. A
+ * tie is reported as ambiguous and never resolved by picking the first.
+ */
+function matchJobType(text, jobs) {
+  const hay = ` ${norm(text)} `;
+  const squashedHay = norm(text).replace(/\s+/g, '');
+  const scored = [];
+
+  for (const job of jobs) {
+    const name = stripDocumentWords(job.name);
+    const full = norm(name);
+    if (!full) continue;
+    const squashed = full.replace(/\s+/g, '');
+
+    if (hay.includes(` ${full} `)) {
+      scored.push({ entry: job, score: 1000 + full.length, how: 'full name' });
+      continue;
+    }
+    /* "teambuilding" and "team building" are the same request. */
+    if (squashed.length > 5 && squashedHay.includes(squashed)) {
+      scored.push({ entry: job, score: 900 + squashed.length, how: 'name written as one word' });
+      continue;
+    }
+    const words = distinctive(full, JOB_WEAK);
+    if (!words.length) continue;
+    const hit = words.filter((w) => hay.includes(` ${w} `) || hay.includes(` ${w}s `));
+    if (!hit.length) continue;
+    /* Every word matched outranks some of them, and more words outrank fewer. */
+    const score = hit.length === words.length
+      ? 500 + words.join('').length
+      : hit.length * 10 + hit.join('').length / 100;
+    scored.push({ entry: job, score, how: hit.length === words.length ? 'all key words' : `${hit.length} of ${words.length} words` });
+  }
+
+  return pickOne(scored);
+}
+
 /**
  * @param {string} text        what the salesperson typed
  * @param {object} catalog     { mcs, hotels, activities, locations, venues, jobTypes, customers }
@@ -325,9 +386,17 @@ function resolve(text, catalog = {}) {
   };
 
   /* Job type first — it decides which template is used, so getting it wrong
-     costs more than any other field. */
+     costs more than any other field.
+
+     It also needs its own idea of which words carry meaning. The general list
+     treats "team", "building", "event" and "programme" as weak, because they
+     turn up in half the hotel and activity names in any catalog. For a job
+     type they are the whole name: "Team Building Proposal" would otherwise be
+     distinguished only by the word "Proposal", and somebody typing "this job
+     is a team building" would be told no job type was recognised. The trailing
+     words that describe the document rather than the job are dropped instead. */
   const jobs = catalog.jobTypes || [];
-  const jobMatch = pickOne(findMatches(t, jobs));
+  const jobMatch = matchJobType(t, jobs);
   if (jobMatch.ambiguous) result.ambiguous.push({ field: 'job type', options: jobMatch.ambiguous });
   result.jobType = jobMatch.value || null;
 
@@ -456,6 +525,6 @@ function describe(r) {
 }
 
 module.exports = {
-  resolve, describe, findMatches, pickOne, norm,
+  resolve, describe, findMatches, pickOne, norm, stripDocumentWords, matchJobType,
   readPax, readDuration, readDates, readCompanies, readMoney, readTimes,
 };
