@@ -10,6 +10,8 @@
  *   --out <path>        where to write it   (default ./Proposal-demo.pptx)
  *   --say "<sentence>"  the request to read  (default: the example below)
  *   --cover <image>     a cover photograph, PNG or JPEG
+ *   --photos <dir>      a folder of pictures, shared out across the records
+ *                       the way catalog_images will hold them
  *
  * The template is the client's own file and is deliberately not in the
  * repository, so the path has to be given.  */
@@ -58,6 +60,35 @@ const ROOMS = {
 const COACH = { id: 'g1', name: 'Executive bus, 44 seats', category: 'transport',
   rate_type: 'flat', rate: 1600, cost_price: 1200, spec: 'Office to hotel, return' };
 
+/* Stands in for catalog_images: the pictures stored against each record.
+   --photos <dir> points it at a folder of images to share out. */
+function photoStore(dir) {
+  if (!dir || !fs.existsSync(dir)) return () => [];
+  /* Largest first: a 815x233 banner is not a cover photograph. */
+  const pool = fs.readdirSync(dir)
+    .filter((f) => /\.(png|jpe?g|gif)$/i.test(f))
+    .map((f) => path.join(dir, f))
+    .map((f) => {
+      const d = tf.imageSize(fs.readFileSync(f));
+      return { f, area: d ? d.width * d.height : 0, ratio: d ? d.width / d.height : 0 };
+    })
+    .filter((x) => x.area > 200000 && x.ratio > 0.5 && x.ratio < 3)
+    .sort((a, b) => b.area - a.area)
+    .map((x) => x.f);
+  if (!pool.length) return () => [];
+  /* Deterministic: the same record always gets the same pictures. */
+  const keys = ['hotel:h1', 'hotel:h2', 'hotel:h3', 'venue:v1',
+    'mc:m1', 'mc:m2', 'activity:a1', 'activity:a2', 'activity:a3'];
+  const held = {};
+  let i = 0;
+  for (const k of keys) {
+    const n = k.startsWith('mc:') ? 1 : 2;
+    held[k] = [];
+    for (let j = 0; j < n && pool.length; j += 1) { held[k].push(pool[i % pool.length]); i += 1; }
+  }
+  return (type, id) => held[`${type}:${id}`] || [];
+}
+
 const DEFAULT_SENTENCE = 'team building for ABC Sdn Bhd, attn: Ms Joanne Teoh, 45 pax, '
   + '14 - 15 March 2026, 2D1N at Lexis Hibiscus Port Dickson, MC Sera Fouzay, '
   + 'amazing race and beach olympics, RM 285 per pax, hotel package RM 180 per pax, '
@@ -73,6 +104,7 @@ async function main() {
   const sentence = arg('say', DEFAULT_SENTENCE);
   const out = path.resolve(arg('out', 'Proposal-demo.pptx'));
   const cover = arg('cover');
+  const photoDir = arg('photos');
 
   console.log(`\nTYPED\n  "${sentence}"\n`);
 
@@ -100,6 +132,7 @@ async function main() {
 
   const built = compose(resolved, {
     selections,
+    photoLookup: photoStore(arg('photos')),
     preparedBy: arg('by', 'Joanne Teoh'),
     preparedByEmail: arg('email', 'joanne@example.com'),
     preparedByMobile: arg('mobile', '+60 12-345 6789'),
@@ -128,12 +161,28 @@ async function main() {
   console.log(`\nWROTE  ${out}`);
   console.log(`  ${res.written.length} targets placed, ${res.photos.length} photograph(s), `
     + `${(res.bytes / 1024 / 1024).toFixed(2)} MB`);
+  const byPage = new Map();
   for (const p of res.photos) {
-    const side = p.crop.l ? 'the sides' : 'top and bottom';
-    const amount = Math.max(p.crop.l, p.crop.t) / 1000;
-    console.log(`  cover: ${p.image.width}x${p.image.height} into `
-      + `${p.frame.w.toFixed(2)}x${p.frame.h.toFixed(2)}", `
-      + (amount ? `${amount.toFixed(1)}% trimmed off ${side}` : 'no trim needed'));
+    if (!byPage.has(p.slide)) byPage.set(p.slide, []);
+    byPage.get(p.slide).push(p);
+  }
+  for (const [page, list] of [...byPage.entries()].sort((a, b) => a[0] - b[0])) {
+    const g = list[0].grid ? ` in a ${list[0].grid} grid` : '';
+    console.log(`  page ${page}: ${list.length} photograph(s)${g}`);
+    for (const p of list) {
+      const side = p.crop.l ? 'the sides' : 'top and bottom';
+      const amount = Math.max(p.crop.l, p.crop.t) / 1000;
+      console.log(`     ${p.image.width}x${p.image.height} into `
+        + `${p.frame.w.toFixed(2)}x${p.frame.h.toFixed(2)}" at `
+        + `${p.frame.x.toFixed(2)},${p.frame.y.toFixed(2)} — `
+        + (amount ? `${amount.toFixed(1)}% off ${side}` : 'no trim needed'));
+    }
+  }
+  if (res.blanked.length) {
+    console.log(`\n  cleared ${res.blanked.length} unused placeholder(s) so none reach the client`);
+  }
+  for (const x of res.leftInProse) {
+    console.log(`  removed an incomplete sentence on page ${x.slide}: "${x.text}"`);
   }
   if (res.problems.length) {
     console.log('\nPROBLEMS');
@@ -143,13 +192,14 @@ async function main() {
     console.log(`\nLEFT AS THE TEMPLATE HAD THEM: ${[...new Set(res.skipped)].join(', ')}`);
   }
   if (res.remaining.length) {
-    console.log('\nSTILL A PLACEHOLDER — check these before sending:');
+    console.log('\nNOTHING WAS KNOWN FOR THESE, SO THEY WERE LEFT EMPTY:');
     for (const r of res.remaining) {
       console.log(`  page ${r.slide}  ${JSON.stringify(r.text)}`
         + (r.after ? `  after "${r.after}"` : ''));
     }
+    console.log('  (the placeholder text is gone; the space is simply blank)');
   } else {
-    console.log('\nNo placeholder left anywhere in the deck.');
+    console.log('\nEvery spot in the deck was filled.');
   }
   console.log('');
 }

@@ -93,11 +93,86 @@ function programLine(resolved) {
   return parts.join('  |  ') || null;
 }
 
+
+/* ───────── photographs ─────────
+   Every record in the catalog can carry pictures, so a request that names a
+   hotel, an event hall, a host and three activities already knows which
+   pictures belong in the deck. Gathering them is a lookup, not a judgement:
+   the caller supplies `lookup(type, id)` returning the stored paths for that
+   record, in the order somebody put them in, and they are used in the order
+   the request named the records.
+
+   Page 5 is "Program Venue & Photo" and page 7 is "Activity Detail", so the
+   venue and the hall go on 5 and the activities on 7. The template has no
+   page for the trainer, so the host's photograph goes last on page 5 — worth
+   settling with the client, because a page of its own would read better. */
+
+const MAX_PER_PAGE = 6;
+
+/**
+ * @param {object}   resolved  from resolve()
+ * @param {function} lookup    (type, id) => string[]  paths held for a record
+ * @param {object}   opts      { perActivity = 2, max = 6, includeHost = true }
+ */
+function gatherPhotos(resolved, lookup, opts = {}) {
+  const max = opts.max || MAX_PER_PAGE;
+  const perActivity = opts.perActivity != null ? opts.perActivity : 2;
+  const get = (type, id) => {
+    try {
+      const got = lookup ? lookup(type, id) : null;
+      return Array.isArray(got) ? got.filter(Boolean) : (got ? [got] : []);
+    } catch {
+      return [];
+    }
+  };
+
+  const missing = [];
+  const note = (kind, name) => missing.push(`${kind}: ${name}`);
+
+  /* Page 5 — the venue, then the hall, then the host. */
+  const venue = [];
+  for (const h of resolved.hotels || []) {
+    const got = get('hotel', h.id);
+    if (!got.length) note('hotel', h.name);
+    venue.push(...got);
+  }
+  for (const v of resolved.venues || []) {
+    const got = get('venue', v.id);
+    if (!got.length) note('event hall', v.name);
+    venue.push(...got);
+  }
+  if (opts.includeHost !== false && resolved.mc) {
+    const got = get('mc', resolved.mc.id);
+    if (!got.length) note('host', resolved.mc.name);
+    venue.push(...got.slice(0, 1));
+  }
+
+  /* Page 7 — the activities, in the order they were asked for, so the page
+     reads in the same order as the itinerary. */
+  const activity = [];
+  for (const a of resolved.activities || []) {
+    const got = get('activity', a.id);
+    if (!got.length) note('activity', a.name);
+    activity.push(...got.slice(0, perActivity));
+  }
+
+  const trim = (list) => [...new Set(list)].slice(0, max);
+  return {
+    venuePhotos: trim(venue),
+    activityPhotos: trim(activity),
+    /* The cover takes the venue's own first picture, which is the photograph
+       the client is being sold on. */
+    coverPhoto: venue[0] || activity[0] || null,
+    missing,
+  };
+}
+
 /**
  * @param {object} resolved  from resolve()
  * @param {object} opts      { sequence, revision, preparedBy, preparedByEmail,
  *                             preparedByMobile, taxPct, coverPhoto, now,
- *                             transportIncluded, selections, rates }
+ *                             transportIncluded, selections, rates,
+ *                             photoLookup, photoOptions }
  *
  * `selections` groups catalog records the way the template groups money:
  *   { programme: { mc, activities, logistics },
@@ -275,9 +350,25 @@ function compose(resolved, opts = {}) {
       + '8, 9 and 12 is left as the template has it. The engine does not invent a figure.');
   }
 
+  /* Photographs, either handed in directly or gathered from the catalog. */
+  if (opts.photoLookup) {
+    const got = gatherPhotos(resolved, opts.photoLookup, opts.photoOptions);
+    if (got.venuePhotos.length) values.venuePhotos = got.venuePhotos;
+    if (got.activityPhotos.length) values.activityPhotos = got.activityPhotos;
+    if (got.coverPhoto && !opts.coverPhoto) values.coverPhoto = got.coverPhoto;
+    for (const m of got.missing) {
+      notes.push(`No picture is stored for ${m}, so nothing was placed for it.`);
+    }
+    if (!got.venuePhotos.length && (resolved.hotels || []).length) {
+      notes.push('Page 5 has no photographs because none of the venues named have '
+        + 'pictures in the catalog yet.');
+    }
+  }
+  if (opts.venuePhotos) values.venuePhotos = opts.venuePhotos;
+  if (opts.activityPhotos) values.activityPhotos = opts.activityPhotos;
   if (opts.coverPhoto) values.coverPhoto = opts.coverPhoto;
 
   return { values, computed, notes: [...notes, ...(resolved.notes || [])] };
 }
 
-module.exports = { compose, reference, abbreviate, money, programLine };
+module.exports = { compose, reference, abbreviate, money, programLine, gatherPhotos };

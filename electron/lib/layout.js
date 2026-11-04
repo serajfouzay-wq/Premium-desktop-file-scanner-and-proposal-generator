@@ -186,7 +186,118 @@ function split(leftRatio = 0.56) {
 
 const round = (n) => Math.round(n * 1000) / 1000;
 
+
+/* ── a grid inside an area measured on the slide itself ──
+   cells() above works in a fixed band, which suits a deck we draw ourselves.
+   When photographs go into a template page that already has a title on it,
+   a fixed band is dangerous: the client's team-building template puts its
+   titles from 1.38" to 2.19" down, so a band starting at 1.85" would lay
+   photographs across the words. The area has to be measured from what is
+   already on the page, and the same column arithmetic then applies inside it. */
+/**
+ * The arrangement that shows pictures of a given shape as large as possible
+ * inside an area, without cropping them.
+ *
+ * gridFor() above answers "how do you arrange n things", which is the right
+ * question for a band of fixed height. It is the wrong question here: four
+ * 4:3 photographs in a band 11.7 inches wide and 4.2 high do not want a two
+ * by two grid, because each cell would then be nearly three times wider than
+ * it is tall and a quarter of every photograph would be cropped away. One row
+ * of four fits them whole. So every arrangement is measured and the one that
+ * shows the most picture wins — a fixed rule would be wrong half the time.
+ */
+function bestGridIn(area, n, aspect) {
+  if (!(n > 0)) return { cols: 0, rows: 0, cellW: 0, cellH: 0 };
+  const ratio = aspect > 0 ? aspect : 1;
+  let best = null;
+  for (let cols = 1; cols <= n; cols += 1) {
+    const rows = Math.ceil(n / cols);
+    const colW = (area.w - GUTTER * (cols - 1)) / cols;
+    const rowH = (area.h - GUTTER * (rows - 1)) / rows;
+    if (colW <= 0 || rowH <= 0) continue;
+    /* Keep the picture's shape: whichever of the two limits binds, take it. */
+    const cellW = Math.min(colW, rowH * ratio);
+    const cellH = cellW / ratio;
+    const score = cellW * cellH;
+    /* Fewer rows reads better when two arrangements show the same amount. */
+    if (!best || score > best.score + 1e-9
+      || (Math.abs(score - best.score) < 1e-9 && rows < best.rows)) {
+      best = { cols, rows, cellW, cellH, score };
+    }
+  }
+  return best || { cols: n, rows: 1, cellW: area.w / n, cellH: area.h };
+}
+
+/* ── a grid inside an area measured on the slide itself ──
+   cells() further up works in a fixed band, which suits a deck we draw
+   ourselves. When photographs go into a template page that already has a
+   title on it, a fixed band is dangerous: the client's team-building template
+   puts its titles from 1.38" to 2.19" down, so a band starting at 1.85" would
+   lay photographs across the words. The area is measured from what is already
+   on the page, and the arrangement is then chosen to suit both that space and
+   the shape of the pictures going into it.
+
+   Pass `aspect` (width / height of the pictures) to have them placed whole.
+   Without it the cells simply divide the area, as cells() does. */
+function cellsIn(area, n, opts = {}) {
+  let cols; let rows; let cellW; let cellH;
+  if (opts.aspect > 0) {
+    const g = bestGridIn(area, n, opts.aspect);
+    ({ cols, rows, cellW, cellH } = g);
+  } else {
+    const g = gridFor(n);
+    cols = g.cols;
+    rows = g.rows;
+    cellW = (area.w - GUTTER * (cols - 1)) / cols;
+    cellH = (area.h - GUTTER * (rows - 1)) / rows;
+  }
+
+  /* The block is centred in the area, so what is left over sits as an even
+     border rather than a gap down one side. */
+  const blockW = cols * cellW + GUTTER * (cols - 1);
+  const blockH = rows * cellH + GUTTER * (rows - 1);
+  const left = area.x + Math.max(0, (area.w - blockW) / 2);
+  const top = area.y + Math.max(0, (area.h - blockH) / 2);
+
+  const out = [];
+  for (let i = 0; i < n; i += 1) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    out.push({
+      col, row,
+      x: round(left + col * (cellW + GUTTER)),
+      y: round(top + row * (cellH + GUTTER)),
+      w: round(cellW),
+      h: round(cellH),
+    });
+  }
+
+  /* An uneven last row is centred too, so three pictures in a grid built for
+     four do not sit hard against the left with a hole beside them. */
+  const lastRow = out.filter((c) => c.row === rows - 1);
+  if (lastRow.length && lastRow.length < cols) {
+    const used = lastRow.length * cellW + GUTTER * (lastRow.length - 1);
+    const shift = round(area.x + (area.w - used) / 2 - lastRow[0].x);
+    lastRow.forEach((c) => { c.x = round(c.x + shift); });
+  }
+
+  /* Rounding each edge to a thousandth of an inch can push the far column a
+     thousandth past the area. That is 914 EMU and invisible, but a cell
+     outside its area by any amount makes "the photographs stay inside the
+     space measured for them" untestable, so the far edges are clamped. */
+  const right = area.x + area.w;
+  const bottom = area.y + area.h;
+  for (const c of out) {
+    if (c.x + c.w > right) c.w = round(right - c.x);
+    if (c.y + c.h > bottom) c.h = round(bottom - c.y);
+    if (c.x < area.x) c.x = round(area.x);
+    if (c.y < area.y) c.y = round(area.y);
+  }
+  return { cells: out, cols, rows, hero: n <= 1 };
+}
+
 module.exports = {
+  cellsIn, bestGridIn,
   SLIDE, MARGIN, GUTTER, BAND, FOOTER_Y, ASPECT, PER_SLIDE,
   gridFor, paginate, cells, fitBox, card, hero, split, contentW,
 };

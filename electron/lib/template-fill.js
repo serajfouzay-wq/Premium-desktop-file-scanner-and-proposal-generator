@@ -1,6 +1,7 @@
 'use strict';
 const fs = require('fs/promises');
 const JSZip = require('jszip');
+const layout = require('./layout');
 
 /*
  * Filling the client's own PowerPoint, rather than drawing a new one.
@@ -98,8 +99,9 @@ async function inspect(templatePath) {
  *                                picture slots: [{ slide, pic, field }]
  *                                literal runs:  [{ slide, find, replace, count }]
  *                                after a label: [{ slide, after, field, expect }]
+ *                                photo grid:    [{ slide, grid: true, field, max }]
  * @param {object} values        { field: 'text to write' | '/path/to/photo.jpg' }
- * @param {object} opts          { strict = true }
+ * @param {object} opts          { strict = true, blankUnfilled = true }
  */
 async function fill(templatePath, destination, mapping, values, opts = {}) {
   const strict = opts.strict !== false;
@@ -124,6 +126,7 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
   const skipped = [];
   const problems = [];
   const originals = new Map();
+  const size = await slideSize(zip);
 
   for (const [slide, entries] of bySlide) {
     const name = `ppt/slides/slide${slide}.xml`;
@@ -136,6 +139,10 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
     const tables = tablesOf(original);
     const frames = picturesOf(original);
     const edits = [];
+    /* New shapes are appended to the shape tree rather than replacing a span,
+       so they are applied after the span edits, when the position of
+       </p:spTree> is settled. */
+    const appends = [];
 
     for (const entry of entries) {
       const value = values[entry.field];
@@ -169,6 +176,89 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
         written.push({
           slide, table: entry.table, row: entry.row, col: entry.col,
           field: entry.field, value: String(value),
+        });
+        continue;
+      }
+
+      /* ── a grid of photographs on an otherwise empty page ──
+         The one place the engine chooses geometry. It measures the space left
+         on the page and lays the photographs out inside it, so they cannot
+         cover the title: one fills the space, three make a row, four a two by
+         two, more a three by two with the last row centred. */
+      if (entry.grid) {
+        const list = (Array.isArray(value) ? value : [value]).filter(Boolean);
+        if (!list.length) { skipped.push(entry.field); continue; }
+        const area = freeArea(original, size, entry.area);
+        const min = entry.minHeight != null ? entry.minHeight : 1.0;
+        if (!(area.h >= min) || !(area.w > 0)) {
+          problems.push(`slide ${slide} has no room for photographs `
+            + `(${area.h.toFixed(2)}" free below what is already there), so `
+            + `${entry.field} was not placed`);
+          continue;
+        }
+        const take = list.slice(0, entry.max || 6);
+        if (take.length < list.length) {
+          problems.push(`slide ${slide} takes ${take.length} photograph(s) for `
+            + `${entry.field}; ${list.length - take.length} more were not placed`);
+        }
+        /* The pictures are read before the grid is laid out, because their
+           shape decides how tall a cell should be. */
+        const loaded = [];
+        for (const src of take) {
+          let buffer;
+          try {
+            buffer = await fs.readFile(src);
+          } catch {
+            problems.push(`cannot read the photograph ${src} for ${entry.field}`);
+            continue;
+          }
+          const ext = String(src).split('.').pop().toLowerCase().replace(/^jpg$/, 'jpeg');
+          if (!MIME[ext]) {
+            problems.push(`${entry.field}: ${ext} is not an image format PowerPoint accepts`);
+            continue;
+          }
+          const dim = imageSize(buffer);
+          if (!dim) {
+            problems.push(`${entry.field}: ${src} is not a readable PNG, JPEG or GIF`);
+            continue;
+          }
+          loaded.push({ src, buffer, ext, dim });
+        }
+        if (!loaded.length) continue;
+
+        /* The middle shape of the set, so one odd picture does not drag the
+           whole row out of proportion. */
+        const ratios = loaded.map((l) => l.dim.width / l.dim.height).sort((a, b) => a - b);
+        const aspect = ratios[Math.floor(ratios.length / 2)];
+        const grid = layout.cellsIn(area, loaded.length, { aspect });
+        let nextId = maxShapeId(original) + 1;
+        for (let i = 0; i < loaded.length; i += 1) {
+          const { src, buffer, ext, dim } = loaded[i];
+          const cell = grid.cells[i];
+          const crop = coverCrop(cell.w / cell.h, dim.width / dim.height);
+          const rId = await addImageRel(zip, slide, buffer, ext);
+          appends.push(buildPicture({
+            id: nextId,
+            name: `${entry.field} ${i + 1}`,
+            rId,
+            rect: cell,
+            crop,
+          }));
+          nextId += 1;
+          photos.push({
+            slide,
+            field: entry.field,
+            source: String(src),
+            added: true,
+            frame: { x: cell.x, y: cell.y, w: cell.w, h: cell.h, ratio: cell.w / cell.h },
+            image: dim,
+            crop,
+            grid: `${grid.cols}x${grid.rows}`,
+            area,
+          });
+        }
+        written.push({
+          slide, field: entry.field, placed: loaded.length, grid: `${grid.cols}x${grid.rows}`,
         });
         continue;
       }
@@ -259,8 +349,16 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
           problems.push(`slide ${slide}: no run contains "${entry.find}"`);
           continue;
         }
-        const replacement = entry.replace != null ? entry.replace
-          : (value != null ? String(value) : '');
+        /* `replace` says what to put there regardless of any value, which is
+           how the template's own notes to its filler are removed. Without it,
+           a missing value must SKIP: replacing with an empty string would
+           erase the figure out of a sentence and leave "the rate of  per
+           session covers up to ." on the page. */
+        if (entry.replace == null && (value == null || value === '')) {
+          skipped.push(entry.field || entry.find);
+          continue;
+        }
+        const replacement = entry.replace != null ? entry.replace : String(value);
         for (const r of hits) {
           edits.push({
             start: r.start,
@@ -318,6 +416,7 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
     for (const e of sorted.slice().reverse()) {
       xml = xml.slice(0, e.start) + e.text + xml.slice(e.end);
     }
+    xml = appendShapes(xml, appends);
     zip.file(name, xml);
     /* Kept so the leftover scan can address runs as they are in the TEMPLATE,
        which is what a mapping entry refers to. */
@@ -363,6 +462,96 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
   }
   remaining.sort((a, b) => a.slide - b.slide);
 
+  /* ── clear what is left ──
+     A placeholder is a note to whoever fills the template in, not content: a
+     deck that reaches a client showing "xxx" looks unfinished whatever else is
+     right about it. So any run that is nothing but a placeholder is emptied,
+     and what was emptied is reported, because an empty line on a price table
+     still needs somebody to look at it before the deck goes out.
+
+     Only a run that is ENTIRELY a placeholder is cleared. "RM xxx per session
+     covers up to xxx participants" is a sentence with gaps in it, and blanking
+     part of it would leave broken prose, so those are reported instead. */
+  const blanked = [];
+  const leftInProse = [];
+  if (opts.blankUnfilled !== false) {
+    /* A table cell is cleared whole, never run by run. The total cell on page
+       8 holds "xxx +Xxx +": emptying its placeholders one at a time would
+       leave a lone "+" sitting in the column, so if everything in a cell is
+       placeholder and punctuation the whole cell goes. */
+    const PURE = /^[\s]*[xX]{2,}[\s.:·–+-]*$/;
+    const CELL_PLACEHOLDER = /^[\sxX.:·–+()-]*$/;
+
+    for (const n of Object.keys(zip.files).filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f))) {
+      const slide = slideNumber(n);
+      let xml = await zip.file(n).async('string');
+      const clears = [];
+
+      const cellRanges = [];
+      for (const table of tablesOf(xml)) {
+        for (const row of table.rows) {
+          for (const cell of row) {
+            if (!cell.runs.length) continue;
+            if (!/[xX]{2,}/.test(cell.text)) continue;
+            if (!CELL_PLACEHOLDER.test(cell.text)) continue;
+            for (const r of cell.runs) clears.push({ start: r.start, end: r.end });
+            cellRanges.push([cell.start, cell.end]);
+            blanked.push({ slide, was: cell.text.trim(), cell: [cell.row, cell.col] });
+          }
+        }
+      }
+
+      for (const r of runsOf(xml)) {
+        if (!PURE.test(r.text)) continue;
+        if (cellRanges.some(([a, b]) => r.start >= a && r.end <= b)) continue;
+        clears.push({ start: r.start, end: r.end });
+        blanked.push({ slide, was: r.text.trim() });
+      }
+
+      if (!clears.length) continue;
+      clears.sort((a, b) => b.start - a.start);
+      for (const c of clears) xml = xml.slice(0, c.start) + xml.slice(c.end);
+      zip.file(n, xml);
+    }
+
+    /* A placeholder left inside a sentence cannot simply be emptied: "For
+       Professional Fees, the rate of RM xxx per session covers up to xxx
+       participants." becomes "the rate of  per session covers up to ." which
+       is worse than the placeholder was. The sentence means nothing without
+       its figures, so the whole paragraph goes, and what went is reported.
+
+       A text body must keep at least one paragraph to stay valid, so where it
+       is the only one its runs are emptied instead of the paragraph removed. */
+    for (const n of Object.keys(zip.files).filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f))) {
+      const slide = slideNumber(n);
+      let xml = await zip.file(n).async('string');
+      const cuts = [];
+      for (const body of xml.matchAll(/<(a:txBody|p:txBody)>[\s\S]*?<\/\1>/g)) {
+        const paras = [...body[0].matchAll(/<a:p>[\s\S]*?<\/a:p>/g)];
+        for (const para of paras) {
+          const text = [...para[0].matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)]
+            .map((t) => unescapeXml(t[1])).join('');
+          if (!/[xX]{3,}/.test(text)) continue;
+          const at = body.index + para.index;
+          if (paras.length > 1) {
+            cuts.push({ start: at, end: at + para[0].length, text: '' });
+          } else {
+            /* Keep the paragraph, drop its runs. */
+            for (const r of para[0].matchAll(/<a:r>[\s\S]*?<\/a:r>/g)) {
+              cuts.push({ start: at + r.index, end: at + r.index + r[0].length, text: '' });
+            }
+          }
+          leftInProse.push({ slide, text: text.trim().slice(0, 70), removed: true });
+        }
+      }
+      if (!cuts.length) continue;
+      cuts.sort((a, b) => b.start - a.start);
+      for (const c of cuts) xml = xml.slice(0, c.start) + c.text + xml.slice(c.end);
+      zip.file(n, xml);
+    }
+  }
+  blanked.sort((a, b) => a.slide - b.slide);
+
   if (strict && problems.length) {
     const err = new Error(`The template does not match the mapping:\n  ${problems.join('\n  ')}`);
     err.problems = problems;
@@ -376,7 +565,18 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
   });
   await fs.writeFile(destination, out);
 
-  return { path: destination, bytes: out.length, written, photos, skipped, problems, remaining };
+  return {
+    path: destination,
+    bytes: out.length,
+    written,
+    photos,
+    skipped,
+    problems,
+    /* Where a placeholder was before it was cleared, so somebody can check. */
+    remaining,
+    blanked,
+    leftInProse,
+  };
 }
 /** Read the text of every slide back, for checking what a fill produced. */
 async function readText(pptxPath) {
@@ -648,9 +848,130 @@ async function inspectTables(templatePath) {
   return out;
 }
 
+
+/* ───────── putting photographs onto an empty page ─────────
+   Pages 5, 6 and 7 of the client's template carry a title and nothing else:
+   "Program Venue & Photo", "Program Itinerary", "Activity Detail". A frame
+   has to be created there rather than filled, which is the one case where the
+   engine decides geometry. Two rules keep that safe:
+
+   1. The space is measured, never assumed. Everything already on the page is
+      read, and photographs go below the lowest of it. The titles here run to
+      2.19 inches down, so a hard-coded content band starting at 1.85 would
+      print pictures across the words.
+   2. The left and right edges follow the title's own left edge, so the block
+      lines up with the page rather than with a margin from somewhere else. */
+
+const SLIDE_DEFAULT = { w: 13.333, h: 7.5 };
+const round3 = (n) => Math.round(n * 1000) / 1000;
+
+/** The slide size, in inches, from the presentation part. */
+async function slideSize(zip) {
+  const f = zip.file('ppt/presentation.xml');
+  if (!f) return { ...SLIDE_DEFAULT };
+  const xml = await f.async('string');
+  const m = xml.match(/<p:sldSz[^>]*cx="(\d+)"[^>]*cy="(\d+)"/)
+    || xml.match(/<p:sldSz[^>]*cy="(\d+)"[^>]*cx="(\d+)"/);
+  if (!m) return { ...SLIDE_DEFAULT };
+  return { w: Number(m[1]) / EMU_PER_INCH, h: Number(m[2]) / EMU_PER_INCH };
+}
+
+/** Every positioned shape on a slide, in inches. */
+function boxesOf(xml) {
+  const out = [];
+  const re = /<(p:sp|p:pic|p:graphicFrame|p:grpSp)\b[\s\S]*?<\/\1>/g;
+  let m;
+  while ((m = re.exec(xml))) {
+    const off = m[0].match(/<a:off x="(-?\d+)" y="(-?\d+)"/);
+    const ext = m[0].match(/<a:ext cx="(\d+)" cy="(\d+)"/);
+    if (!off || !ext) continue;
+    out.push({
+      kind: m[1],
+      x: Number(off[1]) / EMU_PER_INCH,
+      y: Number(off[2]) / EMU_PER_INCH,
+      w: Number(ext[1]) / EMU_PER_INCH,
+      h: Number(ext[2]) / EMU_PER_INCH,
+      text: [...m[0].matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)].map((t) => t[1]).join('').trim(),
+    });
+  }
+  return out;
+}
+
+/**
+ * The free rectangle below everything already on a slide.
+ * @param {string} xml
+ * @param {{w:number,h:number}} slide
+ * @param {{gutter:number, margin:number}} opts
+ */
+function freeArea(xml, slide = SLIDE_DEFAULT, opts = {}) {
+  const gutter = opts.gutter != null ? opts.gutter : 0.28;
+  const boxes = boxesOf(xml);
+  /* A full-bleed background is not an obstacle: it covers the whole page, so
+     taking it as "occupied" would leave nowhere to put anything. */
+  const content = boxes.filter((b) => !(b.w >= slide.w - 0.05 && b.h >= slide.h - 0.05));
+  const bottom = content.length ? Math.max(...content.map((b) => b.y + b.h)) : 0;
+  /* Follow the existing left edge where there is one, so the block lines up
+     with the title instead of with a margin invented here. */
+  const left = content.length
+    ? Math.min(...content.map((b) => b.x))
+    : (opts.margin != null ? opts.margin : 0.62);
+  const marginX = Math.max(0.2, left);
+  const top = bottom > 0 ? bottom + gutter : marginX;
+  const marginBottom = opts.margin != null ? opts.margin : marginX;
+  return {
+    x: round3(marginX),
+    y: round3(top),
+    w: round3(slide.w - marginX * 2),
+    h: round3(slide.h - top - marginBottom),
+    measuredFrom: content.length ? `${content.length} shape(s), lowest at ${round3(bottom)}"` : 'an empty page',
+  };
+}
+
+const emu = (inches) => Math.round(inches * EMU_PER_INCH);
+
+/** The largest shape id in use on a slide, so a new one does not collide. */
+function maxShapeId(xml) {
+  let max = 1;
+  for (const m of xml.matchAll(/<p:cNvPr\s+id="(\d+)"/g)) {
+    max = Math.max(max, Number(m[1]));
+  }
+  return max;
+}
+
+/** A <p:pic> element placed at a rectangle given in inches. */
+function buildPicture({ id, name, rId, rect, crop }) {
+  const c = crop || { l: 0, t: 0, r: 0, b: 0 };
+  return '<p:pic>'
+    + '<p:nvPicPr>'
+    + `<p:cNvPr id="${id}" name="${escapeXml(name)}"/>`
+    + '<p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>'
+    + '<p:nvPr/>'
+    + '</p:nvPicPr>'
+    + '<p:blipFill>'
+    + `<a:blip r:embed="${rId}"/>`
+    + `<a:srcRect l="${c.l}" t="${c.t}" r="${c.r}" b="${c.b}"/>`
+    + '<a:stretch><a:fillRect/></a:stretch>'
+    + '</p:blipFill>'
+    + '<p:spPr>'
+    + `<a:xfrm><a:off x="${emu(rect.x)}" y="${emu(rect.y)}"/>`
+    + `<a:ext cx="${emu(rect.w)}" cy="${emu(rect.h)}"/></a:xfrm>`
+    + '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+    + '</p:spPr>'
+    + '</p:pic>';
+}
+
+/** Add the elements to a slide's shape tree, which is where they must sit. */
+function appendShapes(xml, elements) {
+  if (!elements.length) return xml;
+  const close = xml.lastIndexOf('</p:spTree>');
+  if (close < 0) return xml;
+  return xml.slice(0, close) + elements.join('') + xml.slice(close);
+}
+
 module.exports = {
   inspect, fill, readText, runsOf, isPlaceholder,
   imageSize, coverCrop, picturesOf, addImageRel, repointPicture, repointPictureBody,
   ensureContentType,
   tablesOf, writeCell, inspectTables,
+  slideSize, boxesOf, freeArea, buildPicture, appendShapes, maxShapeId,
 };

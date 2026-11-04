@@ -10,7 +10,9 @@ const tf = require('../electron/lib/template-fill');
 const jt = require('../electron/lib/job-types');
 const { resolve } = require('../electron/lib/resolve');
 const { compose, reference, abbreviate } = require('../electron/lib/compose');
-const { writePng } = require('./helpers/png');
+const { writePng, SHAPES } = require('./helpers/png');
+const JSZip = require('jszip');
+const layout = require('../electron/lib/layout');
 
 let pass = 0; let fail = 0;
 const check = (name, ok, detail = '') => {
@@ -156,7 +158,7 @@ check('and it says why', noCatalog.notes.some((n) => /does not invent/.test(n)),
 console.log('\n── the mapping ──');
 const mapping = jt.mappingFor('team_building');
 check('every entry addresses exactly one kind of target',
-  mapping.every((m) => [m.slot, m.table, m.pic, m.find, m.after]
+  mapping.every((m) => [m.slot, m.table, m.pic, m.find, m.after, m.grid]
     .filter((x) => x != null).length === 1),
   `${mapping.length} entries`);
 check('every entry names a field or a replacement',
@@ -168,9 +170,11 @@ check('no two entries address the same cell twice',
   new Set(mapping.filter((m) => m.table != null)
     .map((m) => `${m.slide}:${m.table}:${m.row}:${m.col}`)).size
   === mapping.filter((m) => m.table != null).length);
-check('the pages with no placeholders are never opened',
+check('the pages it must never open are in no mapping entry',
   jt.TEAM_BUILDING.untouched.every((n) => !mapping.some((m) => m.slide === n)),
   `pages ${jt.TEAM_BUILDING.untouched.join(', ')}`);
+check('the two title-only pages do get photographs',
+  [5, 7].every((n) => mapping.some((m) => m.slide === n && m.grid)));
 check('a request with nothing in it reports what it needs',
   jt.missingFor('team_building', {}).join(',') === 'company,groupSize,programDate');
 
@@ -185,6 +189,13 @@ if (!TEMPLATE || !fs.existsSync(TEMPLATE)) {
   console.log('\n── filling the real 12-page template ──');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'proposal-'));
   const cover = writePng(path.join(dir, 'cover.png'), 2400, 1350, [28, 64, 112]);
+  /* 4:3, the shape most venue and activity photographs actually are. */
+  const photoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cat-photos-'));
+  const shots = [];
+  for (let i = 0; i < 7; i += 1) {
+    shots.push(writePng(path.join(photoDir, `shot${i}.png`), 1600, 1200,
+      [40 + i * 20, 90, 150 - i * 10]));
+  }
   const resolved = resolve(SENTENCE, CATALOG);
   const built = compose(resolved, {
     preparedBy: 'Joanne Teoh',
@@ -195,6 +206,11 @@ if (!TEMPLATE || !fs.existsSync(TEMPLATE)) {
     coverPhoto: cover,
   });
 
+  /* The photographs a request's records would carry, which is how the real
+     flow works: the catalog holds them against the hotel and the activities. */
+  built.values.venuePhotos = shots.slice(0, 3);
+  built.values.activityPhotos = shots.slice(3, 7);
+
   const dest = path.join(dir, 'proposal.pptx');
   const res = await tf.fill(TEMPLATE, dest, mapping, built.values);
 
@@ -202,7 +218,12 @@ if (!TEMPLATE || !fs.existsSync(TEMPLATE)) {
     res.problems.join('; '));
   check('nothing was left unplaced for want of a value', res.skipped.length === 0,
     res.skipped.join(', '));
-  check('the cover photograph went in', res.photos.length === 1);
+  check('the cover photograph went into the frame already on page 1',
+    res.photos.filter((p) => p.slide === 1 && !p.added).length === 1,
+    `${res.photos.length} photograph(s) in all`);
+  check('and the rest were added to the title-only pages',
+    res.photos.filter((p) => p.added).length === 7,
+    res.photos.filter((p) => p.added).map((p) => `p${p.slide}`).join(' '));
 
   const slides = await tf.readText(dest);
   const text = (n) => slides.find((s) => s.slide === n).runs.join(' ');
@@ -312,6 +333,149 @@ if (!TEMPLATE || !fs.existsSync(TEMPLATE)) {
     clash ? clash.message.split('\n')[0] : 'did not throw');
   check('it names both entries', clash != null && /\(one and two\)/.test(clash.message));
   check('and writes nothing', !fs.existsSync(path.join(dir, 'clash.pptx')));
+
+  /* ── photographs onto the pages that are only a title ── */
+  console.log('\n── photographs on the empty pages ──');
+  const withPhotos = await tf.fill(TEMPLATE, path.join(dir, 'photos.pptx'), mapping, {
+    ...built.values,
+    venuePhotos: shots.slice(0, 3),
+    activityPhotos: shots.slice(3, 7),
+  });
+  check('photographs were added to the venue page',
+    withPhotos.photos.some((p) => p.slide === 5 && p.added),
+    `${withPhotos.photos.filter((p) => p.slide === 5).length} on page 5`);
+  check('photographs were added to the activity page',
+    withPhotos.photos.some((p) => p.slide === 7 && p.added),
+    `${withPhotos.photos.filter((p) => p.slide === 7).length} on page 7`);
+  check('nothing had to be cropped to fit',
+    withPhotos.photos.filter((p) => p.added)
+      .every((p) => p.crop.l === 0 && p.crop.t === 0),
+    withPhotos.photos.filter((p) => p.added).map((p) => p.grid).join(', '));
+
+  const zipPhotos = await JSZip.loadAsync(fs.readFileSync(path.join(dir, 'photos.pptx')));
+  for (const page of [5, 7]) {
+    const xml = await zipPhotos.file(`ppt/slides/slide${page}.xml`).async('string');
+    const boxes = tf.boxesOf(xml);
+    const title = boxes.find((b) => b.kind === 'p:sp' && b.text);
+    const pics = boxes.filter((b) => b.kind === 'p:pic');
+    check(`page ${page}: the title is still there`, title != null && title.text.length > 0,
+      title ? JSON.stringify(title.text) : 'gone');
+    const over = pics.filter((p) => p.y < title.y + title.h - 0.001
+      && p.y + p.h > title.y + 0.001
+      && p.x < title.x + title.w - 0.001 && p.x + p.w > title.x + 0.001);
+    check(`page ${page}: no photograph covers the title`, over.length === 0,
+      `${pics.length} photo(s), highest top ${Math.min(...pics.map((p) => p.y)).toFixed(2)}" `
+      + `vs title bottom ${(title.y + title.h).toFixed(2)}"`);
+    let overlap = false;
+    for (let i = 0; i < pics.length; i += 1) {
+      for (let j = i + 1; j < pics.length; j += 1) {
+        const a = pics[i]; const b = pics[j];
+        if (a.x < b.x + b.w - 0.001 && b.x < a.x + a.w - 0.001
+          && a.y < b.y + b.h - 0.001 && b.y < a.y + a.h - 0.001) overlap = true;
+      }
+    }
+    check(`page ${page}: no two photographs overlap`, !overlap);
+    const outside = pics.filter((p) => p.x < -0.001 || p.y < -0.001
+      || p.x + p.w > 13.334 || p.y + p.h > 7.501);
+    check(`page ${page}: every photograph is on the slide`, outside.length === 0);
+    const refs = [...xml.matchAll(/r:embed="([^"]+)"/g)].map((m) => m[1]);
+    const rels = await zipPhotos.file(`ppt/slides/_rels/slide${page}.xml.rels`).async('string');
+    const ids = new Set([...rels.matchAll(/Id="([^"]+)"/g)].map((m) => m[1]));
+    check(`page ${page}: every photograph reference resolves`,
+      refs.length > 0 && refs.every((r) => ids.has(r)), `${refs.length} checked`);
+  }
+  check('the deck is still 12 pages after adding photographs',
+    (await tf.readText(path.join(dir, 'photos.pptx'))).length === 12);
+
+  /* ── no placeholder may reach a client ── */
+  console.log('\n── the xxx are gone ──');
+  const bare = await tf.fill(TEMPLATE, path.join(dir, 'bare.pptx'), mapping,
+    { company: 'ABC Sdn Bhd', groupSize: '45 pax', programDate: '14 - 15 March 2026' },
+    { strict: false });
+  const bareProse = (await tf.readText(path.join(dir, 'bare.pptx')))
+    .map((x) => x.runs.join('')).join('\n');
+  const bareText = (await tf.readText(path.join(dir, 'bare.pptx')))
+    .flatMap((x) => x.runs).join(' ');
+  check('a request with almost nothing in it still leaves no placeholder',
+    !/[xX]{2,}/.test(bareText),
+    (bareText.match(/[xX]{2,}/g) || []).join(', ') || 'none');
+  check('and it says how many it cleared', bare.blanked.length > 0,
+    `${bare.blanked.length} cleared`);
+  /* Joined with nothing, the way the runs actually read on the page: joining
+     with spaces would invent gaps and make a prose check meaningless. */
+  const fullProse = (await tf.readText(path.join(dir, 'photos.pptx')))
+    .map((x) => x.runs.join('')).join('\n');
+  const fullText = (await tf.readText(path.join(dir, 'photos.pptx')))
+    .flatMap((x) => x.runs).join(' ');
+  check('a full request leaves no placeholder either',
+    !/[xX]{2,}/.test(fullText),
+    (fullText.match(/[xX]{2,}/g) || []).join(', ') || 'none');
+
+  /* A gap inside a sentence cannot just be emptied. */
+  const note = (txt) => (txt.match(/the rate of[\s\S]{0,40}/) || [''])[0];
+  check('an unfillable sentence is removed rather than left half-written',
+    !/the rate of\s*per session/.test(bareProse) && !/covers up to\s*\./.test(bareProse),
+    /For Professional Fees/.test(bareProse) ? JSON.stringify(note(bareProse)) : 'the sentence is gone');
+  check('and the same sentence is kept when its figures are known',
+    /the rate of RM [\d,.]+ per session covers up to \d+ participants/.test(fullProse),
+    JSON.stringify(note(fullProse)));
+  check('the rest of that note survived',
+    /Optional items/.test(bareText) && /Quoted fees exclude/.test(bareText));
+
+  /* ── the theme and the branding ── */
+  console.log('\n── the theme and Smart Solutions Learning ──');
+  const before2 = await JSZip.loadAsync(fs.readFileSync(TEMPLATE));
+  const after2 = zipPhotos;
+  const themeParts = Object.keys(before2.files).filter((n) => !before2.files[n].dir
+    && /^ppt\/(theme|slideMasters|slideLayouts|notesMasters)\//.test(n));
+  let identical = 0;
+  for (const n of themeParts) {
+    const x = await before2.file(n).async('nodebuffer');
+    const f = after2.file(n);
+    if (f && x.equals(await f.async('nodebuffer'))) identical += 1;
+  }
+  check('the theme, masters and layouts are untouched',
+    identical === themeParts.length && themeParts.length > 0,
+    `${identical}/${themeParts.length} parts byte-identical`);
+
+  const mediaParts = Object.keys(before2.files).filter((n) => /^ppt\/media\/.+/.test(n));
+  let mediaSame = 0;
+  for (const n of mediaParts) {
+    const x = await before2.file(n).async('nodebuffer');
+    const f = after2.file(n);
+    if (f && x.equals(await f.async('nodebuffer'))) mediaSame += 1;
+  }
+  check('every original image, the logo included, is byte-identical',
+    mediaSame === mediaParts.length, `${mediaSame}/${mediaParts.length}`);
+
+  check('the logo on page 1 still points at the logo, not the cover photograph',
+    await (async () => {
+      const xml = await after2.file('ppt/slides/slide1.xml').async('string');
+      const rels = await after2.file('ppt/slides/_rels/slide1.xml.rels').async('string');
+      const map = {};
+      for (const m of rels.matchAll(/Id="([^"]+)"[^>]*Target="([^"]+)"/g)) map[m[1]] = m[2];
+      const pics = tf.picturesOf(xml);
+      return /image3\.png$/.test(map[pics[1].embed] || '');
+    })());
+  check('Smart Solutions Learning is still named on the fixed pages',
+    (fullText.match(/Smart Solutions Learning/g) || []).length >= 4,
+    `${(fullText.match(/Smart Solutions Learning/g) || []).length} mentions`);
+  const sz = await tf.slideSize(after2);
+  check('the slide size is unchanged', Math.abs(sz.w - 13.3333) < 0.01 && sz.h === 7.5,
+    `${sz.w.toFixed(2)} x ${sz.h}`);
+
+  /* ── the grid follows the space and the pictures ── */
+  console.log('\n── the arrangement adapts ──');
+  const band = { x: 0.813, y: 2.466, w: 11.706, h: 4.22 };
+  for (const [n, aspect, want] of [[1, 4 / 3, '1x1'], [3, 4 / 3, '3x1'],
+    [4, 4 / 3, '4x1'], [4, 16 / 9, '2x2'], [6, 4 / 3, '3x2']]) {
+    const g = layout.cellsIn(band, n, { aspect });
+    check(`${n} picture(s) at ${aspect.toFixed(2)} become ${want}`,
+      `${g.cols}x${g.rows}` === want, `${g.cols}x${g.rows}`);
+    const c = g.cells[0];
+    check(`  and keep their shape`, Math.abs((c.w / c.h) - aspect) < 0.02,
+      (c.w / c.h).toFixed(3));
+  }
 
   console.log(`\n   ${(res.bytes / 1024 / 1024).toFixed(2)} MB, `
     + `${res.written.length} targets placed`);

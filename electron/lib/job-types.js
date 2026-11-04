@@ -27,9 +27,13 @@ const TEAM_BUILDING = {
   template: 'Teambuilding Proposal template.pptx',
   slides: 12,
 
-  /* Pages with no placeholder at all: branding, the programme description,
-     the methodology and the terms. The engine does not open them. */
-  untouched: [2, 3, 5, 6, 7, 10, 11],
+  /* Pages the engine never opens: "About us", "Clientele", the itinerary page
+     and the two pages of terms. Their wording, their artwork and the company's
+     own name on them come through a fill untouched.
+
+     Pages 5 and 7 are not in this list any more: they carry a title and
+     nothing else, so photographs are placed beneath it — see photoGrids. */
+  untouched: [2, 3, 6, 10, 11],
 
   text: [
     /* ── page 1, the cover sheet ──
@@ -110,11 +114,22 @@ const TEAM_BUILDING = {
     { slide: 9, table: 0, row: 2, col: 3, field: 'grandTotal', expect: 'xxx' },
   ],
 
-  /* The cover photograph. The 12-page template carries artwork only on its
-     first two pages; the venue and activity pages are added from the state
-     decks, whose frames are a 6.67 x 3.75 inch quad grid. */
+  /* The cover photograph replaces the artwork already on page 1. The logo
+     beside it is picture 1 and is never touched, so the branding stays. */
   photos: [
     { slide: 1, pic: 0, field: 'coverPhoto' },
+  ],
+
+  /* Pages 5 and 7 carry a title and nothing else — "Program Venue & Photo"
+     and "Activity Detail" — so photographs are placed there rather than into
+     an existing frame. The space is measured on the page, below the title.
+
+     The template has no page for the trainer, so the host's photograph joins
+     the venue page, after the venue's own. Worth settling with the client:
+     a dedicated page would read better. */
+  photoGrids: [
+    { slide: 5, grid: true, field: 'venuePhotos', max: 6 },
+    { slide: 7, grid: true, field: 'activityPhotos', max: 6 },
   ],
 
   /* How this template groups money. The investment pages name four items and
@@ -154,6 +169,7 @@ function mappingFor(jobType) {
   return [
     ...(j.text || []), ...(j.labelled || []), ...(j.phrases || []),
     ...(j.notes || []), ...(j.cells || []), ...(j.photos || []),
+    ...(j.photoGrids || []),
   ];
 }
 
