@@ -15,6 +15,7 @@
      - Nothing is rounded on the way through: money is held in cents. */
 
 const pricing = require('./pricing');
+const itinerary = require('./itinerary');
 
 const pad2 = (n) => String(n).padStart(2, '0');
 
@@ -103,16 +104,16 @@ function programLine(resolved) {
    the request named the records.
 
    Page 5 is "Program Venue & Photo" and page 7 is "Activity Detail", so the
-   venue and the hall go on 5 and the activities on 7. The template has no
-   page for the trainer, so the host's photograph goes last on page 5 — worth
-   settling with the client, because a page of its own would read better. */
+   venue and the hall go on 5 and the activities on 7. The host no longer
+   joins them: the engine now creates a page of their own after the venue, so
+   putting their photograph among the venue's would show it twice. */
 
 const MAX_PER_PAGE = 6;
 
 /**
  * @param {object}   resolved  from resolve()
  * @param {function} lookup    (type, id) => string[]  paths held for a record
- * @param {object}   opts      { perActivity = 2, max = 6, includeHost = true }
+ * @param {object}   opts      { perActivity = 2, max = 6, includeHost = false }
  */
 function gatherPhotos(resolved, lookup, opts = {}) {
   const max = opts.max || MAX_PER_PAGE;
@@ -141,7 +142,9 @@ function gatherPhotos(resolved, lookup, opts = {}) {
     if (!got.length) note('event hall', v.name);
     venue.push(...got);
   }
-  if (opts.includeHost !== false && resolved.mc) {
+  /* The host has their own page now, so they are only added here if a caller
+     explicitly asks for it. */
+  if (opts.includeHost === true && resolved.mc) {
     const got = get('mc', resolved.mc.id);
     if (!got.length) note('host', resolved.mc.name);
     venue.push(...got.slice(0, 1));
@@ -366,6 +369,44 @@ function compose(resolved, opts = {}) {
   }
   if (opts.venuePhotos) values.venuePhotos = opts.venuePhotos;
   if (opts.activityPhotos) values.activityPhotos = opts.activityPhotos;
+  /* ── the itinerary ──
+     Built from the request rather than stored per city: the journey time is
+     the only figure that varies, and both bus times follow from it. */
+  if (opts.itinerary !== false) {
+    const plan = itinerary.build(resolved, { journeyMinutes: opts.journeyMinutes });
+    values.itineraryRows = itinerary.asRows(plan);
+    values.departOffice = plan.departOffice;
+    values.arriveBack = plan.arriveBack;
+    computed.push(`bus leaves the office at ${plan.departOffice} and is back at `
+      + `${plan.arriveBack} (9.30am arrival, 1.30pm departure, `
+      + `${(plan.journeyMinutes / 60).toFixed(1)}h each way)`);
+    plan.notes.forEach((n) => notes.push(n));
+  }
+
+  /* ── the trainer's own page ──
+     The template has no page for the host, so one is created. What goes on it
+     is the host's record: nothing is written about them that the catalog does
+     not already say. */
+  if (resolved.mc) {
+    const mc = resolved.mc;
+    const lines = [{ text: mc.name, bold: true, size: 2000 }];
+    if (mc.headline) lines.push({ text: mc.headline, size: 1300 });
+    if (mc.years) lines.push({ text: `${mc.years} years hosting corporate programmes`, size: 1200 });
+    if (mc.languages) lines.push({ text: `Languages: ${mc.languages}`, size: 1200 });
+    if (mc.bio) lines.push({ text: mc.bio, size: 1100 });
+    values.trainerLines = lines;
+    if (opts.photoLookup) {
+      try {
+        const pics = opts.photoLookup('mc', mc.id);
+        if (Array.isArray(pics) && pics.length) values.trainerPhotos = pics.slice(0, 2);
+      } catch { /* no picture stored; the page still carries who they are */ }
+    }
+    if (!values.trainerPhotos) {
+      notes.push(`No picture is stored for ${mc.name}, so the trainer page carries `
+        + 'their details without a photograph.');
+    }
+  }
+
   if (opts.coverPhoto) values.coverPhoto = opts.coverPhoto;
 
   return { values, computed, notes: [...notes, ...(resolved.notes || [])] };

@@ -184,14 +184,37 @@ export default function Proposal() {
           <div className="text-[12px] text-ink-soft">
             {result.placed} spots filled
             {result.photos.length ? ` · ${result.photos.length} photograph(s)` : ''}
+            {result.itinerary ? ` · itinerary of ${result.itinerary} rows` : ''}
+            {result.addedSlides && result.addedSlides.length
+              ? ` · ${result.addedSlides.length} page(s) created`
+              : ''}
             {result.cleared ? ` · ${result.cleared} unused placeholder(s) cleared` : ''}
             {` · ${(result.bytes / 1024 / 1024).toFixed(1)} MB`}
           </div>
 
+          {result.addedSlides && result.addedSlides.length > 0 && (
+            <div className="mt-3 rounded-lg bg-ledger-wash p-3 text-[12px]">
+              <span className="font-semibold">Pages the template did not have: </span>
+              {result.addedSlides.map((a) => a.title || `page ${a.slide}`).join(', ')}
+              {' — added after page '}
+              {result.addedSlides.map((a) => a.after).join(', ')}
+              {'.'}
+            </div>
+          )}
+          {result.departOffice && (
+            <div className="mt-2 text-[12px] text-ink-soft">
+              The coach leaves the office at{' '}
+              <span className="font-semibold text-ink">{result.departOffice}</span>
+              {' and is back at '}
+              <span className="font-semibold text-ink">{result.arriveBack}</span>
+              {'. Both follow from the journey time stored against the city.'}
+            </div>
+          )}
+
           <Lines title="The money, and where each figure came from" items={result.computed} />
           <Lines
             title="Photographs placed"
-            items={result.photos.map((p) => `page ${p.slide}: ${p.size}`
+            items={result.photos.map((p) => `page ${p.slide}${p.onNewSlide ? ' (created)' : ''}: ${p.size}`
               + (p.grid ? ` in a ${p.grid} grid` : ' into the frame already there')
               + (p.trimmed ? ` — ${p.trimmed}% trimmed to fit` : ' — no trim needed'))}
           />

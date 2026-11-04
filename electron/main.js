@@ -480,6 +480,13 @@ handle('proposal:build', async ({ text, jobTypeId, sequence, revision }) => {
 
   const resolved = readRequest(text || '', catalogForReading());
 
+  /* How long the coach takes to that city, which is the only figure the
+     itinerary varies by. Stored against the city; two hours if nobody has
+     set it yet, and the deck says so. */
+  const journeyMinutes = resolved.location && resolved.location.journey_minutes
+    ? Number(resolved.location.journey_minutes)
+    : null;
+
   /* The records named, grouped the way the template groups money. The rates
      and the pictures come from the catalog, so nobody retypes them. */
   const hotel = resolved.hotels[0] || null;
@@ -505,6 +512,7 @@ handle('proposal:build', async ({ text, jobTypeId, sequence, revision }) => {
     preparedByMobile: prefs.preparedByMobile || brand.phone || null,
     sequence: sequence || (prefs.sequence || 0) + 1,
     revision: revision || 0,
+    journeyMinutes,
   });
 
   const missing = jobTypes.missingFor(job, built.values);
@@ -526,7 +534,11 @@ handle('proposal:build', async ({ text, jobTypeId, sequence, revision }) => {
   /* strict:false so a template the designer has edited still produces a deck,
      with every mismatch reported rather than the whole job refused. */
   const result = await templateFill.fill(template, dest, jobTypes.mappingFor(job),
-    built.values, { strict: false });
+    built.values, {
+      strict: false,
+      /* Pages the template has none of: the trainer's. */
+      addSlides: jobTypes.addSlidesFor(job, built.values),
+    });
 
   /* The running number advances only once a deck has actually been written,
      so a failed attempt does not burn a reference. */
@@ -549,6 +561,10 @@ handle('proposal:build', async ({ text, jobTypeId, sequence, revision }) => {
     })),
     cleared: result.blanked.length,
     removedSentences: result.leftInProse.length,
+    addedSlides: result.added,
+    itinerary: (built.values.itineraryRows || []).length,
+    departOffice: built.values.departOffice || null,
+    arriveBack: built.values.arriveBack || null,
     problems: result.problems,
     missing,
     computed: built.computed,

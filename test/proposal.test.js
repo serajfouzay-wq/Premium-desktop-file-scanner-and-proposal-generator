@@ -158,7 +158,7 @@ check('and it says why', noCatalog.notes.some((n) => /does not invent/.test(n)),
 console.log('\n── the mapping ──');
 const mapping = jt.mappingFor('team_building');
 check('every entry addresses exactly one kind of target',
-  mapping.every((m) => [m.slot, m.table, m.pic, m.find, m.after, m.grid]
+  mapping.every((m) => [m.slot, m.table, m.pic, m.find, m.after, m.grid, m.rows]
     .filter((x) => x != null).length === 1),
   `${mapping.length} entries`);
 check('every entry names a field or a replacement',
@@ -175,6 +175,8 @@ check('the pages it must never open are in no mapping entry',
   `pages ${jt.TEAM_BUILDING.untouched.join(', ')}`);
 check('the two title-only pages do get photographs',
   [5, 7].every((n) => mapping.some((m) => m.slide === n && m.grid)));
+check('and the itinerary page gets a table',
+  mapping.some((m) => m.slide === 6 && m.rows));
 check('a request with nothing in it reports what it needs',
   jt.missingFor('team_building', {}).join(',') === 'company,groupSize,programDate');
 
@@ -476,6 +478,149 @@ if (!TEMPLATE || !fs.existsSync(TEMPLATE)) {
     check(`  and keep their shape`, Math.abs((c.w / c.h) - aspect) < 0.02,
       (c.w / c.h).toFixed(3));
   }
+
+  /* ── pages the engine creates for itself ── */
+  console.log('\n── the itinerary page and the trainer page ──');
+  const MC = {
+    id: 'm1', name: 'Sera Fouzay', headline: 'Lead facilitator and corporate host',
+    years: 11, languages: 'English, Malay',
+    bio: 'Runs large outdoor programmes and keeps a mixed group moving.',
+  };
+  const withMc = resolve(`${SENTENCE}`, { ...CATALOG, mcs: [MC] });
+  const madeUp = compose(withMc, {
+    preparedBy: 'Joanne Teoh',
+    now: new Date('2026-03-01'),
+    sequence: 9,
+    journeyMinutes: 120,
+    photoLookup: (type) => (type === 'mc' ? shots.slice(0, 2) : shots.slice(2, 5)),
+  });
+  check('an itinerary was built for the request', (madeUp.values.itineraryRows || []).length > 10,
+    `${(madeUp.values.itineraryRows || []).length} rows`);
+  check('the trainer page has something to say', (madeUp.values.trainerLines || []).length >= 3,
+    `${(madeUp.values.trainerLines || []).length} lines`);
+  check('the bus times are in the working',
+    madeUp.computed.some((c) => /bus leaves the office/.test(c)),
+    madeUp.computed.find((c) => /bus/.test(c)) || 'nothing');
+
+  const grown = path.join(dir, 'grown.pptx');
+  const addSpecs = jt.addSlidesFor('team_building', madeUp.values);
+  check('one page is created for this request', addSpecs.length === 1,
+    addSpecs.map((a) => a.title).join(', '));
+  const gr = await tf.fill(TEMPLATE, grown, mapping, madeUp.values,
+    { strict: false, addSlides: addSpecs });
+  check('and the fill reported no problem', gr.problems.length === 0, gr.problems.join('; '));
+  check('the deck grew by exactly one page', gr.added.length === 1,
+    JSON.stringify(gr.added));
+
+  const zg = await JSZip.loadAsync(fs.readFileSync(grown));
+  /* The reading order, which is what a person sees — not the file names. */
+  const presXml = await zg.file('ppt/presentation.xml').async('string');
+  const prRels = await zg.file('ppt/_rels/presentation.xml.rels').async('string');
+  const relMap = {};
+  for (const m of prRels.matchAll(/Id="([^"]+)"[^>]*Target="slides\/(slide\d+\.xml)"/g)) {
+    relMap[m[1]] = m[2];
+  }
+  const readingOrder = [...presXml.match(/<p:sldIdLst>([\s\S]*?)<\/p:sldIdLst>/)[1]
+    .matchAll(/r:id="([^"]+)"/g)].map((m) => relMap[m[1]]);
+  check('the deck reads as 13 pages', readingOrder.length === 13, `${readingOrder.length}`);
+  check('every entry in the running order points at a file that exists',
+    readingOrder.every((n) => n && zg.file(`ppt/slides/${n}`)));
+  check('no slide file is left orphaned',
+    Object.keys(zg.files).filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f))
+      .every((f) => readingOrder.includes(f.split('/').pop())));
+
+  const newFile = `slide${gr.added[0].slide}.xml`;
+  check('the new page reads sixth, between the venue and the itinerary',
+    readingOrder.indexOf(newFile) === 5,
+    `position ${readingOrder.indexOf(newFile) + 1} of ${readingOrder.length}`);
+
+  /* The three places a .pptx records a slide. Miss one and PowerPoint offers
+     to repair the file. */
+  const ctg = await zg.file('[Content_Types].xml').async('string');
+  check('the new page is declared in the part list',
+    ctg.includes(`/ppt/slides/${newFile}`));
+  check('and linked from the presentation',
+    prRels.includes(`slides/${newFile}`));
+  const sldIds = [...presXml.matchAll(/<p:sldId id="(\d+)"/g)].map((m) => Number(m[1]));
+  check('its id is unique and at least 256',
+    new Set(sldIds).size === sldIds.length && sldIds.every((x) => x >= 256),
+    sldIds.join(', '));
+
+  const newXml = await zg.file(`ppt/slides/${newFile}`).async('string');
+  const newBoxes = tf.boxesOf(newXml);
+  check('the new page carries its title', /Your Trainer/.test(newXml));
+  check('and the host\'s name and background', /Sera Fouzay/.test(newXml)
+    && /Lead facilitator/.test(newXml));
+  check('it does not keep the venue page\'s photographs it was copied from',
+    newBoxes.filter((b) => b.kind === 'p:pic').length <= 2,
+    `${newBoxes.filter((b) => b.kind === 'p:pic').length} picture(s)`);
+  check('every shape on it has a real size',
+    newBoxes.length > 0 && newBoxes.every((b) => b.w > 0 && b.h > 0),
+    newBoxes.map((b) => `${b.w.toFixed(2)}x${b.h.toFixed(2)}`).join(' '));
+  let newOverlap = false;
+  for (let i = 0; i < newBoxes.length; i += 1) {
+    for (let j = i + 1; j < newBoxes.length; j += 1) {
+      const a = newBoxes[i]; const b = newBoxes[j];
+      if (a.x < b.x + b.w - 0.01 && b.x < a.x + a.w - 0.01
+        && a.y < b.y + b.h - 0.01 && b.y < a.y + a.h - 0.01) newOverlap = true;
+    }
+  }
+  check('nothing on it overlaps anything else', !newOverlap);
+  check('and nothing hangs off the slide',
+    newBoxes.every((b) => b.x >= -0.01 && b.y >= -0.01
+      && b.x + b.w <= 13.34 && b.y + b.h <= 7.51));
+  const newRels = await zg.file(`ppt/slides/_rels/${newFile.replace('.xml', '.xml.rels')}`)
+    .async('string');
+  const newIds = new Set([...newRels.matchAll(/Id="([^"]+)"/g)].map((m) => m[1]));
+  check('every reference on the new page resolves',
+    [...newXml.matchAll(/r:(?:embed|id|link)="([^"]+)"/g)].every((m) => newIds.has(m[1])));
+
+  /* The itinerary table on page 6. */
+  const itinTables = (await tf.inspectTables(grown)).find((x) => x.slide === 6);
+  check('the itinerary page now holds a table', itinTables != null
+    && itinTables.tables.length === 1,
+    itinTables ? `${itinTables.tables.length} table(s)` : 'none');
+  if (itinTables) {
+    const t = itinTables.tables[0];
+    check('two columns, time and programme', t.cols === 2, `${t.cols}`);
+    check('a row for every step', t.rows > 15, `${t.rows} rows`);
+    check('headed TIME', t.cells[0][0] === 'TIME', JSON.stringify(t.cells[0]));
+    check('the bus leaves before it arrives',
+      t.cells[1][1].includes('depart from office'), JSON.stringify(t.cells[1]));
+  }
+  const page6 = tf.boxesOf(await zg.file('ppt/slides/slide6.xml').async('string'));
+  const title6 = page6.find((b) => b.kind === 'p:sp' && b.text);
+  const frame6 = page6.find((b) => b.kind === 'p:graphicFrame');
+  check('the itinerary sits below the page title, not across it',
+    title6 && frame6 && frame6.y >= title6.y + title6.h - 0.01,
+    title6 && frame6 ? `title ends ${(title6.y + title6.h).toFixed(2)}", `
+      + `table starts ${frame6.y.toFixed(2)}"` : 'missing');
+
+  /* The theme must survive a created page too. */
+  let themeStill = 0;
+  for (const n of themeParts) {
+    const x = await before2.file(n).async('nodebuffer');
+    const f = zg.file(n);
+    if (f && x.equals(await f.async('nodebuffer'))) themeStill += 1;
+  }
+  check('the theme is untouched by adding a page',
+    themeStill === themeParts.length, `${themeStill}/${themeParts.length}`);
+  const grownText = (await tf.readText(grown)).flatMap((x) => x.runs).join(' ');
+  check('Smart Solutions Learning is still named', /Smart Solutions Learning/.test(grownText));
+  check('and no placeholder survived', !/[xX]{2,}/.test(grownText),
+    (grownText.match(/[xX]{2,}/g) || []).join(', ') || 'none');
+
+  /* A page with nothing to put on it should not be created. */
+  const noMc = compose(resolve('team building for ABC Sdn Bhd, 45 pax, 14 - 15 March 2026',
+    CATALOG), {});
+  check('no trainer page is created when no host was named',
+    jt.addSlidesFor('team_building', noMc.values).length === 0);
+
+  /* A rectangle with no room must be refused, not written. */
+  let rectErr = null;
+  try { tf.checkRect({ w: -1.2, h: 3 }, 'a test box'); } catch (e) { rectErr = e; }
+  check('a shape with no room is refused rather than written',
+    rectErr != null && /no room/.test(rectErr.message), rectErr && rectErr.message);
 
   console.log(`\n   ${(res.bytes / 1024 / 1024).toFixed(2)} MB, `
     + `${res.written.length} targets placed`);

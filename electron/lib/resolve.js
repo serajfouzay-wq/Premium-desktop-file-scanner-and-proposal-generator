@@ -70,7 +70,14 @@ function findMatches(haystack, entries, nameOf = (e) => e.name, weak = WEAK) {
 
     // Whole name present verbatim — the strongest signal available.
     if (hay.includes(` ${full} `)) {
-      found.push({ entry, score: full.length + 100, matched: full, how: 'full name' });
+      found.push({
+        entry, score: full.length + 100, matched: full, how: 'full name',
+        /* Where it was said. Several things matched at once come back in the
+           order they were named, which for activities is the order they run:
+           an itinerary that lists them in catalog order reads as though the
+           day were planned by the database. */
+        at: hay.indexOf(` ${full} `),
+      });
       continue;
     }
 
@@ -81,13 +88,23 @@ function findMatches(haystack, entries, nameOf = (e) => e.name, weak = WEAK) {
     if (!words.length) continue;
     const hit = words.filter((w) => hay.includes(` ${w} `) || hay.includes(` ${w}s `));
     if (hit.length === words.length) {
-      found.push({ entry, score: words.join('').length, matched: words.join(' '), how: 'all key words' });
+      found.push({
+        entry, score: words.join('').length, matched: words.join(' '), how: 'all key words',
+        at: Math.min(...hit.map((w) => {
+          const i = hay.indexOf(` ${w} `);
+          return i < 0 ? hay.indexOf(` ${w}s `) : i;
+        }).filter((i) => i >= 0)),
+      });
       continue;
     }
     /* A single distinctive word is enough only when it is distinctive across
        the whole catalog — checked by the caller, which knows the other names. */
     if (hit.length === 1 && words.length > 1 && hit[0].length >= 5) {
-      found.push({ entry, score: hit[0].length, matched: hit[0], how: 'partial', partial: true });
+      const i = hay.indexOf(` ${hit[0]} `);
+      found.push({
+        entry, score: hit[0].length, matched: hit[0], how: 'partial', partial: true,
+        at: i >= 0 ? i : hay.indexOf(` ${hit[0]}s `),
+      });
     }
   }
 
@@ -458,12 +475,19 @@ function resolve(text, catalog = {}) {
   if (mc.ambiguous) result.ambiguous.push({ field: 'host', options: mc.ambiguous });
   result.mc = mc.value || null;
 
-  for (const m of findMatches(t, catalog.activities || [])) {
+  /* In the order they were named, not the order the catalog holds them. The
+     itinerary runs the activities in this order, so "amazing race, beach
+     olympics and culinary face-off" has to come back that way round. */
+  const inSaidOrder = (matches) => matches
+    .slice()
+    .sort((a, b) => (a.at == null ? 1e9 : a.at) - (b.at == null ? 1e9 : b.at));
+
+  for (const m of inSaidOrder(findMatches(t, catalog.activities || []))) {
     if (result.activities.some((a) => a.id === m.entry.id)) continue;
     result.activities.push(m.entry);
   }
 
-  for (const m of findMatches(t, catalog.venues || [])) {
+  for (const m of inSaidOrder(findMatches(t, catalog.venues || []))) {
     if (result.venues.some((v) => v.id === m.entry.id)) continue;
     result.venues.push(m.entry);
   }

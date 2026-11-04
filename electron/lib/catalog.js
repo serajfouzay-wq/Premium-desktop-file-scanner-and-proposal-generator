@@ -123,6 +123,12 @@ CREATE INDEX IF NOT EXISTS idx_images_owner    ON catalog_images(owner_type, own
    not a schema edit. Each is checked before it is applied, so starting the app
    twice does not fail the second time. */
 const MIGRATIONS = [
+  /* How long the coach takes to this city, one way. The itinerary's two bus
+     times follow from it: arrival at the hotel is always 9.30am and departure
+     always 1.30pm in the client's own decks, so this one number is the whole
+     difference between a Melaka itinerary and a Port Dickson one. Two hours
+     is the default, and a deck built on the default says so. */
+  ['locations', 'journey_minutes', 'INTEGER NOT NULL DEFAULT 120'],
   ['hotel_rooms', 'cost_price', 'REAL NOT NULL DEFAULT 0', 'nightly_rate'],
   ['mcs', 'cost_price', 'REAL NOT NULL DEFAULT 0', 'day_rate'],
   ['activities', 'cost_price', 'REAL NOT NULL DEFAULT 0', 'rate'],
@@ -375,7 +381,7 @@ const WRITABLE = {
   activities: ['name', 'category', 'summary', 'duration_mins', 'pax_min', 'pax_max', 'rate_type', 'rate', 'gear', 'indoor', 'cost_price'],
   logistics: ['name', 'category', 'spec', 'rate_type', 'rate', 'cost_price'],
   venues: ['location_id', 'name', 'kind', 'description', 'capacity', 'cost_price', 'client_price', 'rate_type'],
-  locations: ['name', 'region', 'blurb', 'sort'],
+  locations: ['name', 'region', 'blurb', 'sort', 'journey_minutes'],
 };
 
 const PREFIX = {

@@ -101,7 +101,11 @@ async function inspect(templatePath) {
  *                                after a label: [{ slide, after, field, expect }]
  *                                photo grid:    [{ slide, grid: true, field, max }]
  * @param {object} values        { field: 'text to write' | '/path/to/photo.jpg' }
- * @param {object} opts          { strict = true, blankUnfilled = true }
+ * @param {object} opts          { strict = true, blankUnfilled = true, addSlides }
+ *
+ * `addSlides` creates pages the template has none of:
+ *   [{ from: 5, after: 5, title, lines, photos, name }]
+ * `from` is the page whose background and layout the new one copies.
  */
 async function fill(templatePath, destination, mapping, values, opts = {}) {
   const strict = opts.strict !== false;
@@ -177,6 +181,31 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
           slide, table: entry.table, row: entry.row, col: entry.col,
           field: entry.field, value: String(value),
         });
+        continue;
+      }
+
+      /* ── a table built onto an otherwise empty page ──
+         The itinerary page carries a title and nothing else, so the table is
+         created, in the space measured below that title. */
+      if (entry.rows) {
+        const data = Array.isArray(value) ? value : null;
+        if (!data || !data.length) { skipped.push(entry.field); continue; }
+        const area = freeArea(original, size, entry.area);
+        if (!(area.h >= (entry.minHeight != null ? entry.minHeight : 1)) || !(area.w > 0)) {
+          problems.push(`slide ${slide} has no room for a table `
+            + `(${area.h.toFixed(2)}" free below what is already there)`);
+          continue;
+        }
+        appends.push(buildTable({
+          id: maxShapeId(original) + 1,
+          name: entry.field,
+          rect: area,
+          rows: data,
+          widths: entry.widths,
+          headerRows: entry.headerRows,
+          fontSize: entry.fontSize,
+        }));
+        written.push({ slide, field: entry.field, tableRows: data.length });
         continue;
       }
 
@@ -423,6 +452,101 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
     originals.set(slide, { xml: original, applied: sorted.map((e) => [e.start, e.end]) });
   }
 
+  /* ── slides the engine creates ──
+     Applied after every fill pass, deliberately: adding a slide renumbers
+     everything after it, and a mapping entry says "page 8" meaning the page 8
+     the designer made. Filling first, then inserting, keeps both true. */
+  const added = [];
+  for (const spec of (opts.addSlides || [])) {
+    try {
+      const n = await cloneSlide(zip, spec.from, spec.after);
+      const name = `ppt/slides/slide${n}.xml`;
+      let xml = await zip.file(name).async('string');
+
+      /* The copy is emptied FIRST, and only then measured. Measuring before
+         clearing read the source page as it stands after its own fill — the
+         venue page by then carries six photographs reaching almost to the
+         bottom edge, so the space left over was negative and every shape was
+         written with a negative extent. PowerPoint will not open that. */
+      xml = replaceShapes(xml, () => false, []);
+
+      let nextId = maxShapeId(xml) + 1;
+      const titleRect = spec.titleRect || { x: 0.813, y: 1.38, w: 7.04, h: 0.81 };
+      if (spec.title != null) {
+        xml = appendShapes(xml, [buildTextBox({
+          id: nextId, name: 'Title', rect: titleRect,
+          lines: [{ text: spec.title, bold: true, size: spec.titleSize || 2800 }],
+        })]);
+        nextId += 1;
+      }
+
+      /* Now the area below the title it will actually have. */
+      const area = freeArea(xml, size, spec.area);
+      checkRect(area, `the ${spec.name || 'new'} page's content area`);
+
+      const built = [];
+      const hasText = spec.lines && spec.lines.length;
+      const hasPics = spec.photos && spec.photos.length;
+
+      if (hasText) {
+        const textRect = hasPics
+          ? { ...area, w: area.w * 0.42 }
+          : area;
+        built.push(buildTextBox({
+          id: nextId, name: spec.name || 'Details', rect: textRect, lines: spec.lines,
+          fontSize: spec.fontSize,
+        }));
+        nextId += 1;
+      }
+
+      if (hasPics) {
+        const picRect = hasText
+          ? { ...area, x: area.x + area.w * 0.46, w: area.w * 0.54 }
+          : area;
+        const loaded = [];
+        for (const src of spec.photos.slice(0, spec.maxPhotos || 3)) {
+          try {
+            const buffer = await fs.readFile(src);
+            const ext = String(src).split('.').pop().toLowerCase().replace(/^jpg$/, 'jpeg');
+            const dim = MIME[ext] ? imageSize(buffer) : null;
+            if (dim) loaded.push({ src, buffer, ext, dim });
+          } catch { /* reported below */ }
+        }
+        if (loaded.length) {
+          const ratios = loaded.map((l) => l.dim.width / l.dim.height).sort((a, b) => a - b);
+          const grid = layout.cellsIn(picRect, loaded.length,
+            { aspect: ratios[Math.floor(ratios.length / 2)] });
+          for (let i = 0; i < loaded.length; i += 1) {
+            const cell = grid.cells[i];
+            const crop = coverCrop(cell.w / cell.h,
+              loaded[i].dim.width / loaded[i].dim.height);
+            const rId = await addImageRel(zip, n, loaded[i].buffer, loaded[i].ext);
+            built.push(buildPicture({
+              id: nextId, name: `${spec.name || 'photo'} ${i + 1}`, rId, rect: cell, crop,
+            }));
+            nextId += 1;
+            photos.push({
+              slide: n, field: spec.name || 'photo', source: loaded[i].src,
+              added: true, onNewSlide: true,
+              frame: { x: cell.x, y: cell.y, w: cell.w, h: cell.h, ratio: cell.w / cell.h },
+              image: loaded[i].dim, crop, grid: `${grid.cols}x${grid.rows}`,
+            });
+          }
+        } else {
+          problems.push(`none of the ${spec.photos.length} picture(s) for the `
+            + `${spec.name || 'new'} page could be read`);
+        }
+      }
+
+      xml = appendShapes(xml, built);
+
+      zip.file(name, xml);
+      added.push({ slide: n, after: spec.after, from: spec.from, title: spec.title || null });
+    } catch (err) {
+      problems.push(`could not add the ${spec.name || 'new'} page: ${err.message}`);
+    }
+  }
+
   /* What is still a placeholder. A deck that reaches a client with "xxx" on
      it is worse than one that was never produced, so every slide is read back
      — not only the ones we touched — and anything that still looks like a
@@ -576,6 +700,8 @@ async function fill(templatePath, destination, mapping, values, opts = {}) {
     remaining,
     blanked,
     leftInProse,
+    /* Slides the engine created, which the template did not have. */
+    added,
   };
 }
 /** Read the text of every slide back, for checking what a fill produced. */
@@ -929,6 +1055,18 @@ function freeArea(xml, slide = SLIDE_DEFAULT, opts = {}) {
 
 const emu = (inches) => Math.round(inches * EMU_PER_INCH);
 
+/* PowerPoint will not open a shape with a zero or negative extent, and the
+   failure is silent in the XML: cx="-914400" simply does not match a reader
+   expecting digits. So a rectangle is checked before anything is built from
+   it, and the caller is told rather than handed a broken file. */
+function checkRect(rect, what) {
+  if (!rect || !(rect.w > 0) || !(rect.h > 0)) {
+    throw new Error(`${what} has no room on the page `
+      + `(${rect ? `${rect.w.toFixed(2)}x${rect.h.toFixed(2)}"` : 'no rectangle'})`);
+  }
+  return rect;
+}
+
 /** The largest shape id in use on a slide, so a new one does not collide. */
 function maxShapeId(xml) {
   let max = 1;
@@ -940,6 +1078,7 @@ function maxShapeId(xml) {
 
 /** A <p:pic> element placed at a rectangle given in inches. */
 function buildPicture({ id, name, rId, rect, crop }) {
+  checkRect(rect, `the picture "${name}"`);
   const c = crop || { l: 0, t: 0, r: 0, b: 0 };
   return '<p:pic>'
     + '<p:nvPicPr>'
@@ -968,10 +1107,212 @@ function appendShapes(xml, elements) {
   return xml.slice(0, close) + elements.join('') + xml.slice(close);
 }
 
+
+/* ───────── building new shapes ─────────
+   Everything above fills what a designer already drew. These two create: a
+   table for the itinerary page, and a whole slide for the trainer, because
+   the client's template has neither. Both follow the theme rather than
+   carrying colours of their own — text asks for the theme's minor font
+   (`+mn-lt`) and the header fills with `accent1`, so if the client restyles
+   the deck these follow it. */
+
+const esc = (v) => escapeXml(String(v == null ? '' : v));
+
+/** A cell's text body; a newline in the text becomes a new paragraph. */
+function cellBody(text, { bold = false, size = 1100, align = 'l', colour = null } = {}) {
+  const runs = String(text == null ? '' : text).split('\n').map((line) => {
+    const fill = colour ? `<a:solidFill><a:srgbClr val="${colour}"/></a:solidFill>` : '';
+    return `<a:p><a:pPr algn="${align}"/>`
+      + `<a:r><a:rPr lang="en-US" sz="${size}" b="${bold ? 1 : 0}" dirty="0">`
+      + `${fill}<a:latin typeface="+mn-lt"/></a:rPr>`
+      + `<a:t>${esc(line)}</a:t></a:r></a:p>`;
+  });
+  return `<a:txBody><a:bodyPr/><a:lstStyle/>${runs.join('')}</a:txBody>`;
+}
+
+/**
+ * A table as a <p:graphicFrame>, placed at a rectangle given in inches.
+ * @param {object} o  { id, name, rect, rows, widths, headerRows, fontSize }
+ */
+function buildTable(o) {
+  const { id, name = 'Table', rect, rows } = o;
+  checkRect(rect, `the table "${name}"`);
+  const cols = Math.max(1, ...rows.map((r) => r.length));
+  /* Column widths as fractions of the frame, defaulting to equal. */
+  const fractions = o.widths && o.widths.length === cols
+    ? o.widths
+    : new Array(cols).fill(1 / cols);
+  const total = fractions.reduce((a, b) => a + b, 0) || 1;
+  const grid = fractions
+    .map((f) => `<a:gridCol w="${emu((f / total) * rect.w)}"/>`).join('');
+
+  const headerRows = o.headerRows != null ? o.headerRows : 1;
+  const size = o.fontSize || 1100;
+  /* Rows are given a nominal height; PowerPoint grows them to fit the text. */
+  const rowH = emu(Math.max(0.24, rect.h / Math.max(1, rows.length)));
+
+  const body = rows.map((row, r) => {
+    const isHeader = r < headerRows || /^TIME$/.test(String(row[0] || ''));
+    const cells = [];
+    for (let c = 0; c < cols; c += 1) {
+      const fillTag = isHeader
+        ? '<a:solidFill><a:schemeClr val="accent1"/></a:solidFill>'
+        : '';
+      cells.push('<a:tc>'
+        + cellBody(row[c], {
+          bold: isHeader,
+          size,
+          align: c === 0 ? 'ctr' : 'l',
+          colour: isHeader ? 'FFFFFF' : null,
+        })
+        + `<a:tcPr marL="54000" marR="54000" marT="27000" marB="27000" anchor="ctr">`
+        + '<a:lnL w="6350"><a:solidFill><a:schemeClr val="bg2"/></a:solidFill></a:lnL>'
+        + '<a:lnR w="6350"><a:solidFill><a:schemeClr val="bg2"/></a:solidFill></a:lnR>'
+        + '<a:lnT w="6350"><a:solidFill><a:schemeClr val="bg2"/></a:solidFill></a:lnT>'
+        + '<a:lnB w="6350"><a:solidFill><a:schemeClr val="bg2"/></a:solidFill></a:lnB>'
+        + `${fillTag}</a:tcPr>`
+        + '</a:tc>');
+    }
+    return `<a:tr h="${rowH}">${cells.join('')}</a:tr>`;
+  }).join('');
+
+  return '<p:graphicFrame>'
+    + '<p:nvGraphicFramePr>'
+    + `<p:cNvPr id="${id}" name="${esc(name)}"/>`
+    + '<p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>'
+    + '<p:nvPr/>'
+    + '</p:nvGraphicFramePr>'
+    + `<p:xfrm><a:off x="${emu(rect.x)}" y="${emu(rect.y)}"/>`
+    + `<a:ext cx="${emu(rect.w)}" cy="${emu(rect.h)}"/></p:xfrm>`
+    + '<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">'
+    + '<a:tbl>'
+    + '<a:tblPr firstRow="1" bandRow="1"/>'
+    + `<a:tblGrid>${grid}</a:tblGrid>`
+    + body
+    + '</a:tbl>'
+    + '</a:graphicData></a:graphic>'
+    + '</p:graphicFrame>';
+}
+
+/** A plain text box at a rectangle given in inches. */
+function buildTextBox(o) {
+  const { id, name = 'Text', rect, lines } = o;
+  checkRect(rect, `the text box "${name}"`);
+  const size = o.fontSize || 1200;
+  const paras = (Array.isArray(lines) ? lines : [lines]).map((line) => {
+    const text = typeof line === 'string' ? line : line.text;
+    const bold = typeof line === 'object' && line.bold;
+    const sz = (typeof line === 'object' && line.size) || size;
+    return `<a:p><a:pPr algn="${o.align || 'l'}"/>`
+      + `<a:r><a:rPr lang="en-US" sz="${sz}" b="${bold ? 1 : 0}" dirty="0">`
+      + '<a:latin typeface="+mn-lt"/></a:rPr>'
+      + `<a:t>${esc(text)}</a:t></a:r></a:p>`;
+  }).join('');
+  return '<p:sp>'
+    + `<p:nvSpPr><p:cNvPr id="${id}" name="${esc(name)}"/>`
+    + '<p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>'
+    + `<p:spPr><a:xfrm><a:off x="${emu(rect.x)}" y="${emu(rect.y)}"/>`
+    + `<a:ext cx="${emu(rect.w)}" cy="${emu(rect.h)}"/></a:xfrm>`
+    + '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>'
+    + `<p:txBody><a:bodyPr wrap="square" rtlCol="0"><a:normAutofit/></a:bodyPr>`
+    + `<a:lstStyle/>${paras}</p:txBody>`
+    + '</p:sp>';
+}
+
+/**
+ * Copy a slide and put the copy at a chosen place in the deck.
+ *
+ * A .pptx keeps the running order in presentation.xml, the part list in
+ * [Content_Types].xml and the links in presentation.xml.rels. Miss any of the
+ * three and PowerPoint offers to repair the file, so all three are written.
+ * The copy points at the same layout and the same images as its source; media
+ * is shared rather than duplicated, which is why the file does not grow.
+ *
+ * @returns {number} the new slide's number
+ */
+async function cloneSlide(zip, sourceNumber, afterNumber) {
+  const srcPath = `ppt/slides/slide${sourceNumber}.xml`;
+  const src = zip.file(srcPath);
+  if (!src) throw new Error(`slide ${sourceNumber} is not in this deck, so it cannot be copied`);
+
+  const numbers = Object.keys(zip.files)
+    .filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))
+    .map(slideNumber);
+  const next = Math.max(...numbers) + 1;
+  const newPath = `ppt/slides/slide${next}.xml`;
+
+  zip.file(newPath, await src.async('string'));
+
+  const srcRels = zip.file(`ppt/slides/_rels/slide${sourceNumber}.xml.rels`);
+  if (srcRels) {
+    zip.file(`ppt/slides/_rels/slide${next}.xml.rels`, await srcRels.async('string'));
+  }
+
+  /* 1. the part list */
+  const ctPath = '[Content_Types].xml';
+  let ct = await zip.file(ctPath).async('string');
+  if (!ct.includes(`/ppt/slides/slide${next}.xml`)) {
+    ct = ct.replace('</Types>',
+      `<Override PartName="/ppt/slides/slide${next}.xml" `
+      + 'ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>'
+      + '</Types>');
+    zip.file(ctPath, ct);
+  }
+
+  /* 2. the link from the presentation */
+  const prPath = 'ppt/_rels/presentation.xml.rels';
+  let pr = await zip.file(prPath).async('string');
+  const used = new Set([...pr.matchAll(/Id="rId(\d+)"/g)].map((m) => Number(m[1])));
+  let n = 1;
+  while (used.has(n)) n += 1;
+  const rId = `rId${n}`;
+  pr = pr.replace('</Relationships>',
+    `<Relationship Id="${rId}" `
+    + 'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" '
+    + `Target="slides/slide${next}.xml"/></Relationships>`);
+  zip.file(prPath, pr);
+
+  /* 3. the running order */
+  const presPath = 'ppt/presentation.xml';
+  let pres = await zip.file(presPath).async('string');
+  const ids = [...pres.matchAll(/<p:sldId\s+id="(\d+)"/g)].map((m) => Number(m[1]));
+  const newId = Math.max(255, ...ids) + 1;
+  const entry = `<p:sldId id="${newId}" r:id="${rId}"/>`;
+
+  const list = pres.match(/<p:sldIdLst>([\s\S]*?)<\/p:sldIdLst>/);
+  if (!list) throw new Error('this deck has no slide list, so a slide cannot be added');
+  const items = [...list[1].matchAll(/<p:sldId\b[^>]*\/>/g)].map((m) => m[0]);
+  /* afterNumber is a position in the deck as it reads, 1-based. */
+  const at = afterNumber == null
+    ? items.length
+    : Math.min(items.length, Math.max(0, afterNumber));
+  items.splice(at, 0, entry);
+  pres = pres.replace(list[0], `<p:sldIdLst>${items.join('')}</p:sldIdLst>`);
+  zip.file(presPath, pres);
+
+  return next;
+}
+
+/** Replace a slide's shapes, keeping its background and layout. */
+function replaceShapes(xml, keep, elements) {
+  /* Shapes are dropped back to front so the earlier offsets stay valid. */
+  let out = xml;
+  const all = [...xml.matchAll(/<(p:sp|p:pic|p:graphicFrame|p:grpSp)\b[\s\S]*?<\/\1>/g)];
+  for (let i = all.length - 1; i >= 0; i -= 1) {
+    const m = all[i];
+    const text = [...m[0].matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)]
+      .map((t) => unescapeXml(t[1])).join('').trim();
+    if (keep && keep(text, m[0], i)) continue;
+    out = out.slice(0, m.index) + out.slice(m.index + m[0].length);
+  }
+  return appendShapes(out, elements);
+}
+
 module.exports = {
   inspect, fill, readText, runsOf, isPlaceholder,
   imageSize, coverCrop, picturesOf, addImageRel, repointPicture, repointPictureBody,
   ensureContentType,
   tablesOf, writeCell, inspectTables,
   slideSize, boxesOf, freeArea, buildPicture, appendShapes, maxShapeId,
+  buildTable, buildTextBox, cellBody, cloneSlide, replaceShapes, checkRect,
 };

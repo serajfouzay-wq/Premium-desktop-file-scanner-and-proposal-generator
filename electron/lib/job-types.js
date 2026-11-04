@@ -31,9 +31,10 @@ const TEAM_BUILDING = {
      and the two pages of terms. Their wording, their artwork and the company's
      own name on them come through a fill untouched.
 
-     Pages 5 and 7 are not in this list any more: they carry a title and
-     nothing else, so photographs are placed beneath it — see photoGrids. */
-  untouched: [2, 3, 6, 10, 11],
+     Pages 5, 6 and 7 are not in this list: each carries a title and nothing
+     else, so the engine puts something under it — photographs on 5 and 7, the
+     timetable on 6. See photoGrids and tables. */
+  untouched: [2, 3, 10, 11],
 
   text: [
     /* ── page 1, the cover sheet ──
@@ -132,6 +133,35 @@ const TEAM_BUILDING = {
     { slide: 7, grid: true, field: 'activityPhotos', max: 6 },
   ],
 
+  /* Page 6, "Program Itinerary", is a title and nothing else, so the
+     timetable is built onto it: time in a narrow first column, the programme
+     in the rest, the way the client's own state decks set it out. */
+  tables: [
+    {
+      slide: 6,
+      rows: true,
+      field: 'itineraryRows',
+      widths: [0.14, 0.86],
+      headerRows: 1,
+      fontSize: 900,
+    },
+  ],
+
+  /* The template has no page for the trainer, so one is created after the
+     venue page: who the host is, and their photograph. It copies page 5 for
+     its background and layout so it belongs to the same deck. */
+  addSlides: [
+    {
+      name: 'trainerPhoto',
+      from: 5,
+      after: 5,
+      title: 'Your Trainer',
+      linesField: 'trainerLines',
+      photosField: 'trainerPhotos',
+      maxPhotos: 2,
+    },
+  ],
+
   /* How this template groups money. The investment pages name four items and
      the engine has to know which catalog records feed each one, because the
      tax line sits under A+B only: a hotel bill carries its own tax, so adding
@@ -169,7 +199,7 @@ function mappingFor(jobType) {
   return [
     ...(j.text || []), ...(j.labelled || []), ...(j.phrases || []),
     ...(j.notes || []), ...(j.cells || []), ...(j.photos || []),
-    ...(j.photoGrids || []),
+    ...(j.photoGrids || []), ...(j.tables || []),
   ];
 }
 
@@ -189,4 +219,26 @@ function missingFor(jobType, values) {
   return (j.required || []).filter((f) => values[f] == null || values[f] === '');
 }
 
-module.exports = { JOB_TYPES, TEAM_BUILDING, byId, mappingFor, fieldsFor, missingFor };
+/**
+ * The slides this job type creates, with the values filled in.
+ * Kept out of mappingFor because adding a slide happens after every fill
+ * pass: a new page renumbers the ones after it, and a mapping entry saying
+ * "page 8" means the page 8 the designer made.
+ */
+function addSlidesFor(jobType, values = {}) {
+  const j = typeof jobType === 'string' ? byId(jobType) : jobType;
+  if (!j || !j.addSlides) return [];
+  return j.addSlides
+    .map((spec) => ({
+      ...spec,
+      lines: spec.linesField ? values[spec.linesField] : spec.lines,
+      photos: spec.photosField ? values[spec.photosField] : spec.photos,
+    }))
+    /* A page with nothing to put on it is not created. */
+    .filter((spec) => (spec.lines && spec.lines.length)
+      || (spec.photos && spec.photos.length));
+}
+
+module.exports = {
+  JOB_TYPES, TEAM_BUILDING, byId, mappingFor, fieldsFor, missingFor, addSlidesFor,
+};

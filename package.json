@@ -25,7 +25,7 @@
     "test:deck": "xvfb-run -a electron --no-sandbox test/deck.test.js",
     "build:shared": "node scripts/build-shared.js",
     "check:shared": "node scripts/build-shared.js --check",
-    "test": "npm run test:resolve && npm run test:images && npm run test:proposal && npm run test:proposal-ipc && npm run test:layout && npm run test:pricing && npm run test:classify && npm run test:catalog && npm run test:scenario && npm run test:e2e && npm run test:deck",
+    "test": "npm run test:resolve && npm run test:itinerary && npm run test:images && npm run test:proposal && npm run test:proposal-ipc && npm run test:layout && npm run test:pricing && npm run test:classify && npm run test:catalog && npm run test:scenario && npm run test:e2e && npm run test:deck",
     "test:layout": "node test/layout.test.js",
     "test:catalog": "xvfb-run -a electron --no-sandbox test/catalog.test.js",
     "test:scenario": "xvfb-run -a electron --no-sandbox test/scenario.test.js",
@@ -34,7 +34,8 @@
     "test:images": "node test/template-images.test.js",
     "test:proposal": "node test/proposal.test.js",
     "demo": "node scripts/demo-proposal.js",
-    "test:proposal-ipc": "xvfb-run -a electron --no-sandbox test/proposal-ipc.test.js"
+    "test:proposal-ipc": "xvfb-run -a electron --no-sandbox test/proposal-ipc.test.js",
+    "test:itinerary": "node test/itinerary.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",

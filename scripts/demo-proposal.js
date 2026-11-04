@@ -156,11 +156,26 @@ async function main() {
   if (missing.length) console.log(`\nSTILL NEEDED: ${missing.join(', ')}`);
 
   const res = await tf.fill(template, out, jt.mappingFor('team_building'),
-    built.values, { strict: false });
+    built.values, {
+      strict: false,
+      addSlides: jt.addSlidesFor('team_building', built.values),
+    });
+
+  if (built.values.itineraryRows) {
+    console.log(`\nITINERARY  ${built.values.itineraryRows.length} rows, `
+      + `coach out at ${built.values.departOffice}, back at ${built.values.arriveBack}`);
+    for (const [time, what] of built.values.itineraryRows) {
+      console.log(`  ${String(time).padEnd(9)}${String(what).split('\n').join(' / ')}`);
+    }
+  }
 
   console.log(`\nWROTE  ${out}`);
   console.log(`  ${res.written.length} targets placed, ${res.photos.length} photograph(s), `
     + `${(res.bytes / 1024 / 1024).toFixed(2)} MB`);
+  for (const a of res.added) {
+    console.log(`  created a page the template did not have: `
+      + `"${a.title}" after page ${a.after}`);
+  }
   const byPage = new Map();
   for (const p of res.photos) {
     if (!byPage.has(p.slide)) byPage.set(p.slide, []);
